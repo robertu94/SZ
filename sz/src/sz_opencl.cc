@@ -87,99 +87,21 @@ calculate_regression_coefficents(struct sz_opencl_state* state,
                                  cl_float* reg_params,
                                  cl_float* const pred_buffer)
 {
-  /*
   std::vector<buffer_copy_info> buffer_info = {
-    { (void*)oriData, sizeof(cl_float)*sizes->num_elements,
+    { (void*)oriData, sizeof(cl_float) * sizes->num_elements,
       CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO },
     { (void*)sizes, sizeof(sz_opencl_sizes),
       CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO },
-    { (void*)reg_params, sizeof(cl_float)*sizes->reg_params_buffer_size,
-      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM  },
-    { (void*)pred_buffer, sizeof(cl_float)*sizes->pred_buffer_size,
+    { (void*)reg_params, sizeof(cl_float) * sizes->reg_params_buffer_size,
+      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
+    { (void*)pred_buffer, sizeof(cl_float) * sizes->pred_buffer_size,
       CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
   };
 
   auto& kernel = state->calculate_regression_coefficents;
   run_kernel(kernel, cl::NDRange(sizes->num_x, sizes->num_y, sizes->num_z),
-  state, sizes, buffer_info);
+             state, sizes, buffer_info);
   state->queue.finish();
-   */
-  for (size_t i = 0; i < sizes->num_x; i++) {
-    for (size_t j = 0; j < sizes->num_y; j++) {
-      for (size_t k = 0; k < sizes->num_z; k++) {
-        const unsigned int block_id =
-          i * (sizes->num_y * sizes->num_z) + j * sizes->num_z + k;
-        const float* data_pos =
-          oriData + i * sizes->block_size * sizes->dim0_offset +
-          j * sizes->block_size * sizes->dim1_offset + k * sizes->block_size;
-        float* const pred_buffer_pos =
-          pred_buffer + (block_id * sizes->num_blocks);
-        for (size_t ii = 0; ii < sizes->block_size; ii++) {
-          for (size_t jj = 0; jj < sizes->block_size; jj++) {
-            for (size_t kk = 0; kk < sizes->block_size; kk++) {
-              int ii_ = (i * sizes->block_size + ii < sizes->r1)
-                          ? ii
-                          : sizes->r1 - 1 - i * sizes->block_size;
-              int jj_ = (j * sizes->block_size + jj < sizes->r2)
-                          ? jj
-                          : sizes->r2 - 1 - j * sizes->block_size;
-              int kk_ = (k * sizes->block_size + kk < sizes->r3)
-                          ? kk
-                          : sizes->r3 - 1 - k * sizes->block_size;
-              cl_ulong loc_data =
-                ii_ * sizes->dim0_offset + jj_ * sizes->dim1_offset + kk_;
-              cl_ulong loc_pred = ii * (sizes->block_size * sizes->block_size) +
-                                  jj * sizes->block_size + kk;
-              pred_buffer_pos[loc_pred] = data_pos[loc_data];
-            }
-          }
-        }
-        {
-          const float* cur_data_pos =
-            pred_buffer + (block_id * sizes->num_blocks);
-          float fx = 0.0;
-          float fy = 0.0;
-          float fz = 0.0;
-          float f = 0;
-          float sum_x, sum_y;
-          float curData;
-          for (size_t i = 0; i < sizes->block_size; i++) {
-            sum_x = 0;
-            for (size_t j = 0; j < sizes->block_size; j++) {
-              sum_y = 0;
-              for (size_t k = 0; k < sizes->block_size; k++) {
-                curData = *cur_data_pos;
-                sum_y += curData;
-                fz += curData * k;
-                cur_data_pos++;
-              }
-              fy += sum_y * j;
-              sum_x += sum_y;
-            }
-            fx += sum_x * i;
-            f += sum_x;
-          }
-          float coeff =
-            1.0 / (sizes->block_size * sizes->block_size * sizes->block_size);
-          float* reg_params_pos = reg_params + block_id;
-          reg_params_pos[0] = (2 * fx / (sizes->block_size - 1) - f) * 6 *
-                              coeff / (sizes->block_size + 1);
-          reg_params_pos[sizes->params_offset_b] =
-            (2 * fy / (sizes->block_size - 1) - f) * 6 * coeff /
-            (sizes->block_size + 1);
-          reg_params_pos[sizes->params_offset_c] =
-            (2 * fz / (sizes->block_size - 1) - f) * 6 * coeff /
-            (sizes->block_size + 1);
-          reg_params_pos[sizes->params_offset_d] =
-            f * coeff - ((sizes->block_size - 1) * reg_params_pos[0] / 2 +
-                         (sizes->block_size - 1) *
-                           reg_params_pos[sizes->params_offset_b] / 2 +
-                         (sizes->block_size - 1) *
-                           reg_params_pos[sizes->params_offset_c] / 2);
-        }
-      }
-    }
-  }
 }
 
 size_t
@@ -689,6 +611,16 @@ decompress_all_blocks(float* const* data, const sz_opencl_sizes& sizes,
   }
 }
 
+namespace {
+  const char*
+  getenv_or(const char* env, const char* default_value)
+  {
+    const char* env_value = getenv(env);
+    if(env_value == nullptr) return default_value;
+    else return env_value;
+  }
+}
+
 extern "C"
 {
   int sz_opencl_init(struct sz_opencl_state** state)
@@ -698,14 +630,27 @@ extern "C"
 
       std::vector<cl::Platform> platforms;
       cl::Platform::get(&platforms);
+      std::string desired_platform(getenv_or("SZ_CL_PLATFORM",""));
+      std::string desired_device(getenv_or("SZ_CL_DEVICE",""));
 
       auto valid_platform =
         std::find_if(std::begin(platforms), std::end(platforms),
-                     [state](cl::Platform const& platform) {
+                     [state, &desired_platform, &desired_device](cl::Platform const& platform) {
                        try {
                          std::vector<cl::Device> devices;
-                         platform.getDevices(CL_DEVICE_TYPE_GPU, &devices);
-                         (*state)->device = devices.front();
+                         platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
+                         auto device_it = std::find_if(std::begin(devices), std::end(devices),
+                             [&platform,&desired_platform, &desired_device](cl::Device const& device){ 
+                             auto platform_name = platform.getInfo<CL_PLATFORM_NAME>();
+                             auto device_name = device.getInfo<CL_DEVICE_NAME>();
+                             return (platform_name.find(desired_platform) != std::string::npos) &&
+                                    (device_name.find(desired_device) != std::string::npos);
+                         });
+                         if(device_it == std::end(devices))
+                         {
+                            return false;
+                         }
+                         (*state)->device = *device_it;
                          (*state)->platform = platform;
                          return true;
                        } catch (cl::Error const& error) {
@@ -721,7 +666,7 @@ extern "C"
       (*state)->queue = cl::CommandQueue((*state)->context, (*state)->device);
       auto sources = get_sz_kernel_sources();
       cl::Program program((*state)->context, sources);
-      program.build({ (*state)->device }, "-I " SZ_OPENCL_KERNEL_INCLUDE_DIR);
+      program.build({ (*state)->device }, "-I " SZ_OPENCL_KERNEL_INCLUDE_DIR " " SZ_OPENCL_KERNEL_CFLAGS);
       (*state)->calculate_regression_coefficents =
         cl::Kernel(program, "calculate_regression_coefficents");
 
@@ -850,7 +795,7 @@ extern "C"
     bool use_mean = false;
 
     // calculate block dims
-    const sz_opencl_sizes sizes(/*block_size*/ 6, r1, r2, r3);
+    const sz_opencl_sizes sizes = make_sz_opencl_sizes(/*block_size*/ 6, r1, r2, r3);
 
     int* result_type = (int*)malloc(sizes.num_blocks *
                                     sizes.max_num_block_elements * sizeof(int));
@@ -859,7 +804,7 @@ extern "C"
     cl_float* reg_params =
       (cl_float*)malloc(sizeof(cl_float) * sizes.reg_params_buffer_size);
     cl_float* pred_buffer =
-      (cl_float*)malloc(sizeof(cl_float) * sizes.num_blocks * sizes.num_blocks);
+      (cl_float*)malloc(sizeof(cl_float) * sizes.pred_buffer_size);
     unsigned char* indicator =
       (unsigned char*)calloc(sizes.num_blocks, sizeof(unsigned char));
     int* blockwise_unpred_count = (int*)malloc(sizes.num_blocks * sizeof(int));
@@ -957,8 +902,8 @@ extern "C"
       convert_HuffTree_to_bytes_anyStates(huffmanTree, nodeCount, &treeBytes);
 
     const unsigned int meta_data_offset = 3 + 1 + MetaDataByteLength;
-    // total size 										metadata		  #
-    // elements real precision intervals nodeCount		huffman block
+    // total size 										metadata
+    // # elements real precision intervals nodeCount		huffman block
     // index unpredicatable count mean unpred size elements
     unsigned char* result = (unsigned char*)calloc(
       meta_data_offset + exe_params->SZ_SIZE_TYPE + sizeof(double) +
@@ -1085,7 +1030,7 @@ extern "C"
 
     unsigned char* comp_data_pos = comp_data;
 
-    sz_opencl_sizes sizes(bytesToInt_bigEndian(comp_data_pos), r1, r2, r3);
+    const sz_opencl_sizes sizes = make_sz_opencl_sizes(bytesToInt_bigEndian(comp_data_pos), r1, r2, r3);
     comp_data_pos += sizeof(int);
     // calculate block dims
 

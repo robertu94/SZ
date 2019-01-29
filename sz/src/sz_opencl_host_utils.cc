@@ -48,7 +48,8 @@ run_kernel(cl::Kernel kernel, cl::NDRange const& global,
                                        buffer_info[i].size, nullptr,
                                        &input_written[i]);
         break;
-      default:
+      case copy_mode::FROM:
+        // noop
         break;
     }
     kernel.setArg(i, buffers[i]);
@@ -63,18 +64,21 @@ run_kernel(cl::Kernel kernel, cl::NDRange const& global,
   bool waited = false;
   for (size_t i = 0; i < buffer_info.size(); ++i) {
     switch (buffer_info[i].copy) {
+      case copy_mode::TO_FROM:
       case copy_mode::FROM:
       case copy_mode::ZERO_FROM: {
         if (!waited) {
           computed.wait();
           waited = true;
         }
-        state->queue.enqueueReadBuffer(buffers[i], CL_FALSE, 0,
+        state->queue.enqueueReadBuffer(buffers[i], CL_NON_BLOCKING, 0,
                                        buffer_info[i].size, buffer_info[i].ptr,
                                        nullptr, &outputs_written[i]);
         break;
       }
-      default:
+      case copy_mode::TO:
+      case copy_mode::ZERO:
+        // noop
         break;
     }
   }
