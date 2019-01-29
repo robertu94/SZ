@@ -5,11 +5,15 @@ RUN dnf update -y && \
         coreutils-single \
         CUnit-devel \
         ctags \
+        clang-7.0.0 \
+        clang-libs-7.0.0 \
         fftw-devel \
-        libomp-devel \
+        libomp-devel-7.0.0 \
         libzstd-devel \
         netcdf-devel \
+        ninja-build \
         ocl-icd-devel \
+        pocl-devel \
         gcc \
         zlib-devel && \
     dnf clean all
@@ -18,5 +22,5 @@ WORKDIR /build/
 RUN rm -rf build && \
     mkdir -p build && \
     cd build && \
-    cmake .. && \
-    make -j $(nproc --all)
+    cmake .. -G Ninja && \
+    ninja

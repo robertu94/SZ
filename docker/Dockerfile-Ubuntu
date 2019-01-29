@@ -8,8 +8,10 @@ RUN apt-get update -y && \
         exuberant-ctags \
         libfftw3-dev \
         libomp-dev \
+        libpocl-dev \
         libzstd1-dev \
         libnetcdf-dev \
+        ninja-build \
         ocl-icd-opencl-dev \
         opencl-clhpp-headers \
         gcc \
@@ -21,5 +23,5 @@ WORKDIR /build/
 RUN rm -rf build && \
     mkdir -p build && \
     cd build && \
-    cmake .. && \
-    make -j $(nproc --all)
+    cmake -G Ninja .. && \
+    ninja 
