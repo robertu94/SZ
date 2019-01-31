@@ -7,6 +7,7 @@
 #define cl_int int
 #define cl_uint uint
 #define cl_double double
+#define cl_uchar uchar
 #define CL_GLOBAL_DECL __global
 #endif
 

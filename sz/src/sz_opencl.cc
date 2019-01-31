@@ -48,6 +48,8 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
     (unsigned short*)malloc(sizes->num_blocks * sizeof(unsigned short));
   unsigned char* type_array_buffer_pos = type_array_buffer;
   unsigned short* type_array_block_size_pos = type_array_block_size;
+  //TODO parallelize this loop
+  //#pragma omp parallel for collapse(3)
   for (size_t i = 0; i < sizes->num_x; i++) {
     for (size_t j = 0; j < sizes->num_y; j++) {
       for (size_t k = 0; k < sizes->num_z; k++) {
@@ -117,6 +119,8 @@ save_unpredictable_data(const float* data_pos, sz_opencl_sizes const* sizes,
   size_t total_unpred = 0;
   int intvCapacity_sz = intvCapacity - 2;
   type = result_type;
+  //TODO parallelize this loop
+  //#pragma omp parallel for collapse(3)
   for (size_t i = 0; i < sizes->num_x; i++) {
     for (size_t j = 0; j < sizes->num_y; j++) {
       for (size_t k = 0; k < sizes->num_z; k++) {
@@ -298,14 +302,24 @@ compute_errors(const float* reg_params_pos, const float* pred_buffer,
 }
 
 void
-opencl_sample(const sz_opencl_sizes* sizes, const float* oriData,
-              const float* data_pos, float mean, float noise, bool use_mean,
-              float* pred_buffer, float* reg_params_pos, float* pred_buffer_pos,
-              unsigned char* indicator_pos)
+opencl_sample(const sz_opencl_sizes* sizes,
+    const float* oriData,
+    const float* data_pos,
+    float mean,
+    float noise,
+    bool use_mean,
+    float* pred_buffer,
+    float* reg_params_pos,
+    float* pred_buffer_pos,
+    unsigned char* indicator_pos
+    )
 {
+//TODO refactor pred_buffer  to be loop independent
+//#pragma omp parallel for collapse(3) private(pred_buffer_pos)
   for (size_t i = 0; i < sizes->num_x; i++) {
     for (size_t j = 0; j < sizes->num_y; j++) {
       for (size_t k = 0; k < sizes->num_z; k++) {
+        const unsigned int block_id = i * (sizes->num_y * sizes->num_z) + j * sizes->num_z + k;
         data_pos = oriData + i * sizes->block_size * sizes->dim0_offset +
                    j * sizes->block_size * sizes->dim1_offset +
                    k * sizes->block_size;
@@ -314,6 +328,7 @@ opencl_sample(const sz_opencl_sizes* sizes, const float* oriData,
           pred_buffer +
           sizes->pred_buffer_block_size * sizes->pred_buffer_block_size +
           sizes->pred_buffer_block_size + 1;
+          ;
         for (size_t ii = 0; ii < sizes->block_size; ii++) {
           for (size_t jj = 0; jj < sizes->block_size; jj++) {
             for (size_t kk = 0; kk < sizes->block_size; kk++) {
@@ -340,29 +355,26 @@ opencl_sample(const sz_opencl_sizes* sizes, const float* oriData,
           // sample point [1, 1, 1] [1, 1, 4] [1, 4, 1] [1, 4, 4] [4, 1, 1] [4,
           // 1, 4] [4, 4, 1] [4, 4, 4]
           float err_sz = 0.0, err_reg = 0.0;
-          for (size_t i = 2; i <= sizes->block_size; i++) {
-            compute_errors(reg_params_pos, pred_buffer, sizes, mean, noise,
-                           use_mean, i, i, i, (i - 1), (i - 1), err_sz,
+          for (size_t block_i = 2; block_i <= sizes->block_size; block_i++) {
+            compute_errors(&reg_params_pos[block_id], pred_buffer, sizes, mean, noise,
+                           use_mean, block_i, block_i, block_i, (block_i - 1), (block_i - 1), err_sz,
                            err_reg);
 
-            int bmi = sizes->block_size - i + 1;
-            compute_errors(reg_params_pos, pred_buffer, sizes, mean, noise,
-                           use_mean, i, i, bmi, (i - 1), bmi, err_sz, err_reg);
+            int bmi = sizes->block_size - block_i + 1;
+            compute_errors(&reg_params_pos[block_id], pred_buffer, sizes, mean, noise,
+                           use_mean, block_i, block_i, bmi, (block_i - 1), bmi, err_sz, err_reg);
 
-            compute_errors(reg_params_pos, pred_buffer, sizes, mean, noise,
-                           use_mean, i, bmi, i, bmi, (i - 1), err_sz, err_reg);
+            compute_errors(&reg_params_pos[block_id], pred_buffer, sizes, mean, noise,
+                           use_mean, block_i, bmi, block_i, bmi, (block_i - 1), err_sz, err_reg);
 
-            compute_errors(reg_params_pos, pred_buffer, sizes, mean, noise,
-                           use_mean, i, bmi, bmi, bmi, bmi, err_sz, err_reg);
+            compute_errors(&reg_params_pos[block_id], pred_buffer, sizes, mean, noise,
+                           use_mean, block_i, bmi, bmi, bmi, bmi, err_sz, err_reg);
           }
-          // indicator_pos[k] = (err_sz < err_reg);
-          indicator_pos[k] = err_reg >= err_sz;
+          indicator_pos[(i*sizes->num_y+j)*sizes->num_z+k] = err_reg >= err_sz;
         }
-        reg_params_pos++;
-      } // end k
-      indicator_pos += sizes->num_z;
-    } // end j
-  }   // end i
+      }// end k
+    }// end j
+  }// end i
 }
 
 void
@@ -372,16 +384,16 @@ decompress_location_using_regression(const sz_opencl_sizes& sizes,
                                      double realPrecision, int intvRadius,
                                      float* data_out)
 {
-  float pred;
-  int type_;
-  size_t index = 0;
   size_t unpredictable_count = 0;
+  //TODO refactor unpredictable count in to a pre-scan to remove dependance on unpredictable_count
+  //#pragma omp parallel for collapse(3)
   for (size_t ii = 0; ii < sizes.block_size; ii++) {
     for (size_t jj = 0; jj < sizes.block_size; jj++) {
       for (size_t kk = 0; kk < sizes.block_size; kk++) {
-        type_ = type[index];
+        size_t index = (ii*sizes.block_size*sizes.block_size) + (jj*sizes.block_size) + kk;
+        int type_ = type[index];
         if (type_ != 0) {
-          pred = reg_params_pos[0] * ii + reg_params_pos[1] * jj +
+          float pred = reg_params_pos[0] * ii + reg_params_pos[1] * jj +
                  reg_params_pos[2] * kk + reg_params_pos[3];
           data_out[ii * sizes.block_dim0_offset + jj * sizes.block_dim1_offset +
                    kk] = pred + 2 * (type_ - intvRadius) * realPrecision;
@@ -389,7 +401,6 @@ decompress_location_using_regression(const sz_opencl_sizes& sizes,
           data_out[ii * sizes.block_dim0_offset + jj * sizes.block_dim1_offset +
                    kk] = block_unpred[unpredictable_count++];
         }
-        index++;
       }
     }
   }
@@ -440,6 +451,7 @@ decompress_location_using_sz(const sz_opencl_sizes& sizes, double realPrecision,
   size_t index = 0;
   int type_;
   size_t unpredictable_count = 0;
+  //DO NOT parallelize this loop too small to matter!
   for (size_t ii = 0; ii < sizes.block_size; ii++) {
     for (size_t jj = 0; jj < sizes.block_size; jj++) {
       for (size_t kk = 0; kk < sizes.block_size; kk++) {
@@ -472,7 +484,9 @@ decode_all_blocks(unsigned char* comp_data_pos, const sz_opencl_sizes& sizes,
                   node_t* root, const sz_opencl_decompress_positions& pos,
                   const size_t* type_array_offset, int* result_type)
 {
+  //TODO refactor
   int* block_type = result_type;
+  //#pragma omp parallel for collapse(3)
   for (size_t i = pos.start_block1; i < pos.end_block1; i++) {
     for (size_t j = pos.start_block2; j < pos.end_block2; j++) {
       for (size_t k = pos.start_block3; k < pos.end_block3; k++) {
@@ -494,6 +508,10 @@ decompress_coefficents(const sz_opencl_sizes& sizes,
 {
   float* reg_params_pos = reg_params;
   size_t coeff_index = 0;
+
+  //TODO coeff_index depends on the values in the indicator array; prescan
+  //TODO reg_params_pos depends on indicator array and i
+  //#pragma omp parallel for
   for (size_t i = 0; i < sizes.num_blocks; i++) {
     if (!indicator[i]) {
       float pred;
@@ -521,6 +539,13 @@ compress_coefficent_arrays(size_t reg_count,
                            const sz_opencl_coefficient_sizes& coefficient_sizes,
                            sz_opencl_coefficient_params& params)
 {
+
+  //TODO unpredictable count is not such that it can be parallelized
+  /*
+  //TODO tune the parallel threshold
+  const int parallel_threshold = 100;
+  #pragma omp parallel for if(reg_count > parallel_threshold)
+  */
   for (size_t coeff_index = 0; coeff_index < reg_count; coeff_index++) {
     for (int e = 0; e < 4; e++) {
       const float cur_coeff = params.reg_params_separte[e][coeff_index];
@@ -555,6 +580,7 @@ compress_coefficent_arrays(size_t reg_count,
   }
   return params;
 }
+
 void
 decompress_all_blocks(float* const* data, const sz_opencl_sizes& sizes,
                       double realPrecision, float mean, unsigned char use_mean,
@@ -574,6 +600,8 @@ decompress_all_blocks(float* const* data, const sz_opencl_sizes& sizes,
   float* block_data_pos_x = NULL;
   float* block_data_pos_y = NULL;
   float* block_data_pos_z = NULL;
+  //TODO there is a data dependancy on one of the pointers passed
+  //#pragma omp parallel for collapse(3)
   for (size_t i = pos.start_block1; i < pos.end_block1; i++) {
     for (size_t j = pos.start_block2; j < pos.end_block2; j++) {
       for (size_t k = pos.start_block3; k < pos.end_block3; k++) {
@@ -1154,6 +1182,8 @@ extern "C"
       (size_t*)malloc(sizes.num_blocks * sizeof(size_t));
     size_t* type_array_offset_pos = type_array_offset;
     size_t cur_type_array_offset = 0;
+    //TODO parallelize this loop
+    //#pragma omp parallel for collapse(3)
     for (size_t i = 0; i < sizes.num_x; i++) {
       for (size_t j = 0; j < sizes.num_y; j++) {
         for (size_t k = 0; k < sizes.num_z; k++) {
@@ -1192,6 +1222,8 @@ extern "C"
     int resi_z = s3 % sizes.block_size;
     *data = (float*)malloc(sizeof(cl_float) * pos.data_buffer_size);
     float* final_data_pos = *data;
+    //TODO parallelize this loop
+    //#pragma omp parallel for collapse(2)
     for (cl_ulong i = 0; i < pos.data_elms1; i++) {
       for (cl_ulong j = 0; j < pos.data_elms2; j++) {
         float* block_data_pos =
