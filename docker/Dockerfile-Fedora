@@ -1,20 +1,20 @@
 FROM fedora:29
 RUN dnf update -y && \
     dnf install -y \
-        cmake \
-        coreutils-single \
+        pocl-devel && \
+    dnf install -y  \
         CUnit-devel \
-        ctags \
         clang-7.0.0 \
         clang-libs-7.0.0 \
+        cmake \
+        ctags \
         fftw-devel \
+        gcc \
         libomp-devel-7.0.0 \
         libzstd-devel \
         netcdf-devel \
         ninja-build \
         ocl-icd-devel \
-        pocl-devel \
-        gcc \
         zlib-devel && \
     dnf clean all
 COPY . /build/

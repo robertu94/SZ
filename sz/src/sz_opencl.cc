@@ -660,6 +660,7 @@ extern "C"
       cl::Platform::get(&platforms);
       std::string desired_platform(getenv_or("SZ_CL_PLATFORM",""));
       std::string desired_device(getenv_or("SZ_CL_DEVICE",""));
+      (*state)->debug_level = atoi(getenv_or("SZ_CL_DEBUG", "0"));
 
       auto valid_platform =
         std::find_if(std::begin(platforms), std::end(platforms),
@@ -668,9 +669,12 @@ extern "C"
                          std::vector<cl::Device> devices;
                          platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
                          auto device_it = std::find_if(std::begin(devices), std::end(devices),
-                             [&platform,&desired_platform, &desired_device](cl::Device const& device){ 
+                             [state,&platform,&desired_platform, &desired_device](cl::Device const& device){ 
                              auto platform_name = platform.getInfo<CL_PLATFORM_NAME>();
                              auto device_name = device.getInfo<CL_DEVICE_NAME>();
+                             if((*state)->debug_level) {
+                              printf("%s %s\n", platform_name.c_str(), device_name.c_str());
+                             }
                              return (platform_name.find(desired_platform) != std::string::npos) &&
                                     (device_name.find(desired_device) != std::string::npos);
                          });
@@ -694,9 +698,19 @@ extern "C"
       (*state)->queue = cl::CommandQueue((*state)->context, (*state)->device);
       auto sources = get_sz_kernel_sources();
       cl::Program program((*state)->context, sources);
+      try {
       program.build({ (*state)->device }, "-I " SZ_OPENCL_KERNEL_INCLUDE_DIR " " SZ_OPENCL_KERNEL_CFLAGS);
       (*state)->calculate_regression_coefficents =
         cl::Kernel(program, "calculate_regression_coefficents");
+      } catch (cl::Error const& cl_error) {
+        if(cl_error.err() == CL_BUILD_PROGRAM_FAILURE) {
+          (*state)->error.code = cl_error.err();
+          (*state)->error.str = program.getBuildInfo<CL_PROGRAM_BUILD_LOG>((*state)->device);
+          return SZ_NSCS;
+        } else {
+          throw;
+        }
+      }
 
       return SZ_SCES;
     } catch (cl::Error const& cl_error) {
@@ -727,7 +741,7 @@ extern "C"
       return "sz opencl allocation failed";
     }
 
-    return state->error.str;
+    return state->error.str.c_str();
   }
 
   int sz_opencl_error_code(struct sz_opencl_state* state)
