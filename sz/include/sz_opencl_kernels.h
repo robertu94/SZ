@@ -2,6 +2,7 @@
 #include <CL/cl_platform.h>
 #define CL_GLOBAL_DECL
 #else
+#pragma OPENCL EXTENSION cl_khr_fp64 : enable
 #define cl_ulong ulong
 #define cl_float float
 #define cl_int int
