@@ -7,6 +7,15 @@ else()
   set(SZ_OPENCL_KERNEL_CFLAGS "")
 endif()
 
+#
+# TODO(robertu94) remove this option and effected regions of the code
+# when the OpenCL kernels have stabalized and work on all tested OpenCL
+# backends.  This option should be checked for all OpenCL kernels that have
+# not be verified on target platforms.
+#
+option(SZ_OPENCL_DISABLE_KERNELS "Use OpenMP implementations instead of OpenCL for
+debugging")
+
 configure_file (${CMAKE_CURRENT_SOURCE_DIR}/include/sz_opencl_config.h.in
 	${CMAKE_CURRENT_BINARY_DIR}/include/sz_opencl_config.h @ONLY)
 

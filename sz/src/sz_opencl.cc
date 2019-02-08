@@ -89,6 +89,7 @@ calculate_regression_coefficents(struct sz_opencl_state* state,
                                  cl_float* reg_params,
                                  cl_float* const pred_buffer)
 {
+#if !SZ_OPENCL_DISABLE_KERNELS
   std::vector<buffer_copy_info> buffer_info = {
     { (void*)oriData, sizeof(cl_float) * sizes->num_elements,
       CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO },
@@ -104,6 +105,83 @@ calculate_regression_coefficents(struct sz_opencl_state* state,
   run_kernel(kernel, cl::NDRange(sizes->num_x, sizes->num_y, sizes->num_z),
              state, sizes, buffer_info);
   state->queue.finish();
+#else
+#pragma omp parallel for collapse(3)
+for (cl_ulong i = 0; i < sizes->num_x; i++) {
+  for (cl_ulong j = 0; j < sizes->num_y; j++) {
+    for (cl_ulong k = 0; k < sizes->num_z; k++) {
+
+      const unsigned int block_id =
+        i * (sizes->num_y * sizes->num_z) + j * sizes->num_z + k;
+      const float* local_data_pos =
+        oriData + i * sizes->block_size * sizes->dim0_offset +
+        j * sizes->block_size * sizes->dim1_offset + k * sizes->block_size;
+      float* const pred_buffer_pos =
+        pred_buffer + (block_id * sizes->num_blocks);
+      for (size_t ii = 0; ii < sizes->block_size; ii++) {
+        for (size_t jj = 0; jj < sizes->block_size; jj++) {
+          for (size_t kk = 0; kk < sizes->block_size; kk++) {
+            int ii_ = (i * sizes->block_size + ii < sizes->r1)
+                        ? ii
+                        : sizes->r1 - 1 - i * sizes->block_size;
+            int jj_ = (j * sizes->block_size + jj < sizes->r2)
+                        ? jj
+                        : sizes->r2 - 1 - j * sizes->block_size;
+            int kk_ = (k * sizes->block_size + kk < sizes->r3)
+                        ? kk
+                        : sizes->r3 - 1 - k * sizes->block_size;
+            cl_ulong loc_data =
+              ii_ * sizes->dim0_offset + jj_ * sizes->dim1_offset + kk_;
+            cl_ulong loc_pred = ii * (sizes->block_size * sizes->block_size) +
+                                jj * sizes->block_size + kk;
+            pred_buffer_pos[loc_pred] = local_data_pos[loc_data];
+          }
+        }
+      }
+      const float* cur_data_pos = pred_buffer + (block_id * sizes->num_blocks);
+      float fx = 0.0;
+      float fy = 0.0;
+      float fz = 0.0;
+      float f = 0;
+      float sum_x, sum_y;
+      float curData;
+      for (size_t i = 0; i < sizes->block_size; i++) {
+        sum_x = 0;
+        for (size_t j = 0; j < sizes->block_size; j++) {
+          sum_y = 0;
+          for (size_t k = 0; k < sizes->block_size; k++) {
+            curData = *cur_data_pos;
+            sum_y += curData;
+            fz += curData * k;
+            cur_data_pos++;
+          }
+          fy += sum_y * j;
+          sum_x += sum_y;
+        }
+        fx += sum_x * i;
+        f += sum_x;
+      }
+      float coeff =
+        1.0 / (sizes->block_size * sizes->block_size * sizes->block_size);
+      float* reg_params_pos = reg_params + block_id;
+      reg_params_pos[0] = (2 * fx / (sizes->block_size - 1) - f) * 6 * coeff /
+                          (sizes->block_size + 1);
+      reg_params_pos[sizes->params_offset_b] =
+        (2 * fy / (sizes->block_size - 1) - f) * 6 * coeff /
+        (sizes->block_size + 1);
+      reg_params_pos[sizes->params_offset_c] =
+        (2 * fz / (sizes->block_size - 1) - f) * 6 * coeff /
+        (sizes->block_size + 1);
+      reg_params_pos[sizes->params_offset_d] =
+        f * coeff -
+        ((sizes->block_size - 1) * reg_params_pos[0] / 2 +
+         (sizes->block_size - 1) * reg_params_pos[sizes->params_offset_b] / 2 +
+         (sizes->block_size - 1) * reg_params_pos[sizes->params_offset_c] / 2);
+    }
+  }
+}
+
+#endif
 }
 
 size_t
