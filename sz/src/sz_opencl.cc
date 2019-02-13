@@ -48,9 +48,43 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
     (unsigned short*)malloc(sizes->num_blocks * sizeof(unsigned short));
   unsigned char* type_array_buffer_pos = type_array_buffer;
   unsigned short* type_array_block_size_pos = type_array_block_size;
+  
+  size_t num_yz = sizes->num_y*sizes->num_z;
   //TODO parallelize this loop
-  //#pragma omp parallel for collapse(3)
+  #pragma omp parallel for collapse(3)
   for (size_t i = 0; i < sizes->num_x; i++) {
+    for (size_t j = 0; j < sizes->num_y; j++) {
+      for (size_t k = 0; k < sizes->num_z; k++) {
+		size_t block_pos = (i*num_yz+j*sizes->num_z+k);
+		size_t buff_pos = block_pos*sizes->max_num_block_elements;
+		
+        size_t typeArray_size = 0;
+        encode(huffmanTree, &type[buff_pos], sizes->max_num_block_elements,
+               &type_array_buffer[buff_pos], &typeArray_size);
+        type_array_block_size[block_pos] = typeArray_size;
+      }
+    }
+  } 
+  
+  size_t first_block_size = type_array_block_size[0];
+  total_type_array_size += first_block_size;
+  unsigned char* type_array_buffer_src_pos = type_array_buffer + sizes->max_num_block_elements;
+  unsigned char* type_array_buffer_tgt_pos = type_array_buffer + first_block_size; //get the current position for compressed type array in the buffer
+  for (size_t i = 1; i < sizes->num_blocks; i++)
+  {
+	 size_t cmpr_size = type_array_block_size[i];
+	 total_type_array_size += cmpr_size;
+	 memcpy(type_array_buffer_tgt_pos, type_array_buffer_src_pos, cmpr_size);
+	 type_array_buffer_src_pos += sizes->max_num_block_elements;
+	 type_array_buffer_tgt_pos += cmpr_size;
+  }
+ 
+/*  type = result_type;
+  total_type_array_size = 0;
+  unsigned char* type_array_buffer_pos = type_array_buffer;
+  unsigned short* type_array_block_size_pos = type_array_block_size;
+ 
+ for (size_t i = 0; i < sizes->num_x; i++) {
     for (size_t j = 0; j < sizes->num_y; j++) {
       for (size_t k = 0; k < sizes->num_z; k++) {
         size_t typeArray_size = 0;
@@ -63,7 +97,10 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
         type_array_block_size_pos++;
       }
     }
-  }
+  }*/
+  
+  //printf("total_type_array_size=%zu\n",total_type_array_size);
+  
   size_t compressed_type_array_block_size;
   unsigned char* compressed_type_array_block = SZ_compress_args(
     SZ_UINT16, type_array_block_size, &compressed_type_array_block_size, ABS,
