@@ -4,13 +4,13 @@ RUN dnf update -y && \
         pocl-devel && \
     dnf install -y  \
         CUnit-devel \
-        clang-7.0.0 \
-        clang-libs-7.0.0 \
+        clang \
+        clang-libs \
         cmake \
         ctags \
         fftw-devel \
         gcc \
-        libomp-devel-7.0.0 \
+        libomp-devel \
         libzstd-devel \
         netcdf-devel \
         ninja-build \
