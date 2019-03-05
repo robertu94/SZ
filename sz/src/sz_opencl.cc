@@ -1,4 +1,5 @@
 #include "sz_opencl.h"
+#include "sz_cuda.h"
 #include "sz.h"
 #include <algorithm>
 #include <iterator>
@@ -46,8 +47,6 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
     sizes->num_blocks * sizes->max_num_block_elements * sizeof(int));
   unsigned short* type_array_block_size =
     (unsigned short*)malloc(sizes->num_blocks * sizeof(unsigned short));
-  unsigned char* type_array_buffer_pos = type_array_buffer;
-  unsigned short* type_array_block_size_pos = type_array_block_size;
   
   size_t num_yz = sizes->num_y*sizes->num_z;
   //TODO parallelize this loop
@@ -126,23 +125,9 @@ calculate_regression_coefficents(struct sz_opencl_state* state,
                                  cl_float* reg_params,
                                  cl_float* const pred_buffer)
 {
-#if !SZ_OPENCL_DISABLE_KERNELS
-  std::vector<buffer_copy_info> buffer_info = {
-    { (void*)oriData, sizeof(cl_float) * sizes->num_elements,
-      CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO },
-    { (void*)sizes, sizeof(sz_opencl_sizes),
-      CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO },
-    { (void*)reg_params, sizeof(cl_float) * sizes->reg_params_buffer_size,
-      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
-    { (void*)pred_buffer, sizeof(cl_float) * sizes->pred_buffer_size,
-      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
-  };
-
-  auto& kernel = state->calculate_regression_coefficents;
-  run_kernel(kernel, cl::NDRange(sizes->num_x, sizes->num_y, sizes->num_z),
-             state, sizes, buffer_info);
-  state->queue.finish();
-#else
+#if SZ_OPENCL_USE_CUDA
+  calculate_regression_coefficents_host(oriData, sizes, reg_params, pred_buffer);  
+#elif SZ_OPENCL_USE_OPENMP
 #pragma omp parallel for collapse(3)
 for (cl_ulong i = 0; i < sizes->num_x; i++) {
   for (cl_ulong j = 0; j < sizes->num_y; j++) {
@@ -217,6 +202,28 @@ for (cl_ulong i = 0; i < sizes->num_x; i++) {
     }
   }
 }
+    
+#else
+  std::vector<buffer_copy_info> buffer_info = {
+    { (void*)oriData, sizeof(cl_float) * sizes->num_elements,
+      CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
+    { (void*)sizes, sizeof(sz_opencl_sizes),
+      CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
+    { (void*)reg_params, sizeof(cl_float) * sizes->reg_params_buffer_size,
+      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
+    { (void*)pred_buffer, sizeof(cl_float) * sizes->pred_buffer_size,
+      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
+  };
+
+
+  auto& kernel = state->calculate_regression_coefficents;
+  run_kernel(kernel, cl::NDRange(sizes->num_x, sizes->num_y, sizes->num_z),
+             state, sizes, buffer_info);
+  state->queue.finish();
+  printf("host %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f\n", oriData[0], oriData[1], oriData[2], oriData[sizes->num_elements-3],
+      oriData[sizes->num_elements-2], oriData[sizes->num_elements-1]);
+  printf("host sizes %lu %lu\n", sizes->num_elements, sizes->num_x);
+  printf("=========\n");
 
 #endif
 }
@@ -1493,4 +1500,36 @@ extern "C"
       free(szTmpBytes);
     return status;
   }
+}
+
+
+
+struct sz_opencl_sizes
+make_sz_opencl_sizes(cl_ulong block_size, cl_ulong r1, cl_ulong r2, cl_ulong r3)
+{
+  struct sz_opencl_sizes sizes;
+  sizes.r1=r1;
+  sizes.r2=r2;
+  sizes.r3=r3;
+  sizes.block_size=block_size;
+  sizes.num_x=(sizes.r1 - 1) / block_size + 1;
+  sizes.num_y=(sizes.r2 - 1) / block_size + 1;
+  sizes.num_z=(sizes.r3 - 1) / block_size + 1;
+  sizes.max_num_block_elements=block_size * block_size * block_size;
+  sizes.num_blocks=sizes.num_x * sizes.num_y * sizes.num_z;
+  sizes.num_elements=r1 * r2 * r3;
+  sizes.dim0_offset=r2 * r3;
+  sizes.dim1_offset=r3;
+  sizes.params_offset_b=sizes.num_blocks;
+  sizes.params_offset_c=2 * sizes.num_blocks;
+  sizes.params_offset_d=3 * sizes.num_blocks;
+  sizes.pred_buffer_block_size=sizes.block_size + 1;
+  sizes.strip_dim0_offset=sizes.pred_buffer_block_size * sizes.pred_buffer_block_size;
+  sizes.strip_dim1_offset=sizes.pred_buffer_block_size;
+  sizes.unpred_data_max_size=sizes.max_num_block_elements;
+  sizes.reg_params_buffer_size=sizes.num_blocks * 4;
+  sizes.pred_buffer_size=sizes.num_blocks * sizes.num_blocks;
+  sizes.block_dim0_offset=sizes.pred_buffer_block_size*sizes.pred_buffer_block_size;
+  sizes.block_dim1_offset=sizes.pred_buffer_block_size;
+  return sizes;
 }

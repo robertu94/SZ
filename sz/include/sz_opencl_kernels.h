@@ -1,3 +1,5 @@
+#ifndef SZ_OPENCL_KERNELS
+#define SZ_OPENCL_KERNELS
 #ifdef __cplusplus
 #include <CL/cl_platform.h>
 #define CL_GLOBAL_DECL
@@ -37,36 +39,9 @@ struct sz_opencl_sizes
   cl_ulong block_dim1_offset;
 } ;
 
-struct sz_opencl_sizes
-make_sz_opencl_sizes(cl_ulong block_size, cl_ulong r1, cl_ulong r2, cl_ulong r3)
-{
 
-  struct sz_opencl_sizes sizes;
-  sizes.r1=r1;
-  sizes.r2=r2;
-  sizes.r3=r3;
-  sizes.block_size=block_size;
-  sizes.num_x=(sizes.r1 - 1) / block_size + 1;
-  sizes.num_y=(sizes.r2 - 1) / block_size + 1;
-  sizes.num_z=(sizes.r3 - 1) / block_size + 1;
-  sizes.max_num_block_elements=block_size * block_size * block_size;
-  sizes.num_blocks=sizes.num_x * sizes.num_y * sizes.num_z;
-  sizes.num_elements=r1 * r2 * r3;
-  sizes.dim0_offset=r2 * r3;
-  sizes.dim1_offset=r3;
-  sizes.params_offset_b=sizes.num_blocks;
-  sizes.params_offset_c=2 * sizes.num_blocks;
-  sizes.params_offset_d=3 * sizes.num_blocks;
-  sizes.pred_buffer_block_size=sizes.block_size + 1;
-  sizes.strip_dim0_offset=sizes.pred_buffer_block_size * sizes.pred_buffer_block_size;
-  sizes.strip_dim1_offset=sizes.pred_buffer_block_size;
-  sizes.unpred_data_max_size=sizes.max_num_block_elements;
-  sizes.reg_params_buffer_size=sizes.num_blocks * 4;
-  sizes.pred_buffer_size=sizes.num_blocks * sizes.num_blocks;
-  sizes.block_dim0_offset=sizes.pred_buffer_block_size*sizes.pred_buffer_block_size;
-  sizes.block_dim1_offset=sizes.pred_buffer_block_size;
-  return sizes;
-}
+struct sz_opencl_sizes
+make_sz_opencl_sizes(cl_ulong block_size, cl_ulong r1, cl_ulong r2, cl_ulong r3);
 
 struct sz_opencl_decompress_positions {
 #ifdef __cplusplus
@@ -125,6 +100,7 @@ struct sz_opencl_coefficient_sizes {
 };
 
 
+#ifdef __OPENCL_VERSION__
 void print_first_last_3(CL_GLOBAL_DECL const cl_float* data, uint size)
 {
     printf("%3.2f %3.2f %3.2f %3.2f %3.2f %3.2f\n", 
@@ -136,4 +112,5 @@ void print_first_last_3(CL_GLOBAL_DECL const cl_float* data, uint size)
             data[size-1]
           );
 }
-
+#endif
+#endif
