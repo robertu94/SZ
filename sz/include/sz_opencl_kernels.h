@@ -34,6 +34,10 @@ struct sz_opencl_sizes
   cl_ulong strip_dim1_offset;
   cl_ulong unpred_data_max_size;
   cl_ulong reg_params_buffer_size;
+  cl_ulong data_buffer_size;
+  cl_ulong data_buffer_dim0_offset;
+  cl_ulong data_buffer_dim1_offset;
+
   cl_ulong pred_buffer_size;
   cl_ulong block_dim0_offset;
   cl_ulong block_dim1_offset;

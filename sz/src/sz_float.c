@@ -8358,21 +8358,21 @@ unsigned char * SZ_compress_float_3D_MDQ_decompression_random_access_with_blocke
 							err_reg += fabs(pred_reg - curData);
 
 							bmi = block_size - i + 1;
-							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + i*pred_buffer_block_size + bmi;
+							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + i*pred_buffer_block_size + (bmi+1);
 							curData = *cur_data_pos;
 							pred_sz = cur_data_pos[-1] + cur_data_pos[-strip_dim1_offset]+ cur_data_pos[-strip_dim0_offset] - cur_data_pos[-strip_dim1_offset - 1] - cur_data_pos[-strip_dim0_offset - 1] - cur_data_pos[-strip_dim0_offset - strip_dim1_offset] + cur_data_pos[-strip_dim0_offset - strip_dim1_offset - 1];
 							pred_reg = reg_params_pos[0] * (i-1) + reg_params_pos[params_offset_b] * (i-1) + reg_params_pos[params_offset_c] * bmi + reg_params_pos[params_offset_d];							
 							err_sz += MIN(fabs(pred_sz - curData) + noise, fabs(mean - curData));
 							err_reg += fabs(pred_reg - curData);								
 
-							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + bmi*pred_buffer_block_size + i;
+							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + (bmi+1)*pred_buffer_block_size + i;
 							curData = *cur_data_pos;
 							pred_sz = cur_data_pos[-1] + cur_data_pos[-strip_dim1_offset]+ cur_data_pos[-strip_dim0_offset] - cur_data_pos[-strip_dim1_offset - 1] - cur_data_pos[-strip_dim0_offset - 1] - cur_data_pos[-strip_dim0_offset - strip_dim1_offset] + cur_data_pos[-strip_dim0_offset - strip_dim1_offset - 1];
 							pred_reg = reg_params_pos[0] * (i-1) + reg_params_pos[params_offset_b] * bmi + reg_params_pos[params_offset_c] * (i-1) + reg_params_pos[params_offset_d];							
 							err_sz += MIN(fabs(pred_sz - curData) + noise, fabs(mean - curData));
 							err_reg += fabs(pred_reg - curData);								
 
-							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + bmi*pred_buffer_block_size + bmi;
+							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + (bmi+1)*pred_buffer_block_size + (bmi+1);
 							curData = *cur_data_pos;
 							pred_sz = cur_data_pos[-1] + cur_data_pos[-strip_dim1_offset]+ cur_data_pos[-strip_dim0_offset] - cur_data_pos[-strip_dim1_offset - 1] - cur_data_pos[-strip_dim0_offset - 1] - cur_data_pos[-strip_dim0_offset - strip_dim1_offset] + cur_data_pos[-strip_dim0_offset - strip_dim1_offset - 1];
 							pred_reg = reg_params_pos[0] * (i-1) + reg_params_pos[params_offset_b] * bmi + reg_params_pos[params_offset_c] * bmi + reg_params_pos[params_offset_d];							
@@ -8430,21 +8430,21 @@ unsigned char * SZ_compress_float_3D_MDQ_decompression_random_access_with_blocke
 							err_reg += fabs(pred_reg - curData);
 
 							bmi = block_size - i + 1;
-							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + i*pred_buffer_block_size + bmi;
+							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + i*pred_buffer_block_size + (bmi+1);
 							curData = *cur_data_pos;
 							pred_sz = cur_data_pos[-1] + cur_data_pos[-strip_dim1_offset]+ cur_data_pos[-strip_dim0_offset] - cur_data_pos[-strip_dim1_offset - 1] - cur_data_pos[-strip_dim0_offset - 1] - cur_data_pos[-strip_dim0_offset - strip_dim1_offset] + cur_data_pos[-strip_dim0_offset - strip_dim1_offset - 1];
 							pred_reg = reg_params_pos[0] * (i-1) + reg_params_pos[params_offset_b] * (i-1) + reg_params_pos[params_offset_c] * bmi + reg_params_pos[params_offset_d];							
 							err_sz += fabs(pred_sz - curData) + noise;
 							err_reg += fabs(pred_reg - curData);								
 
-							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + bmi*pred_buffer_block_size + i;
+							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + (bmi+1)*pred_buffer_block_size + i;
 							curData = *cur_data_pos;
 							pred_sz = cur_data_pos[-1] + cur_data_pos[-strip_dim1_offset]+ cur_data_pos[-strip_dim0_offset] - cur_data_pos[-strip_dim1_offset - 1] - cur_data_pos[-strip_dim0_offset - 1] - cur_data_pos[-strip_dim0_offset - strip_dim1_offset] + cur_data_pos[-strip_dim0_offset - strip_dim1_offset - 1];
 							pred_reg = reg_params_pos[0] * (i-1) + reg_params_pos[params_offset_b] * bmi + reg_params_pos[params_offset_c] * (i-1) + reg_params_pos[params_offset_d];							
 							err_sz += fabs(pred_sz - curData) + noise;
 							err_reg += fabs(pred_reg - curData);								
 
-							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + bmi*pred_buffer_block_size + bmi;
+							cur_data_pos = pred_buffer + i*pred_buffer_block_size*pred_buffer_block_size + (bmi+1)*pred_buffer_block_size + (bmi+1);
 							curData = *cur_data_pos;
 							pred_sz = cur_data_pos[-1] + cur_data_pos[-strip_dim1_offset]+ cur_data_pos[-strip_dim0_offset] - cur_data_pos[-strip_dim1_offset - 1] - cur_data_pos[-strip_dim0_offset - 1] - cur_data_pos[-strip_dim0_offset - strip_dim1_offset] + cur_data_pos[-strip_dim0_offset - strip_dim1_offset - 1];
 							pred_reg = reg_params_pos[0] * (i-1) + reg_params_pos[params_offset_b] * bmi + reg_params_pos[params_offset_c] * bmi + reg_params_pos[params_offset_d];							
