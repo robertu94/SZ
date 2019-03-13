@@ -73,7 +73,7 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
   {
 	 size_t cmpr_size = type_array_block_size[i];
 	 total_type_array_size += cmpr_size;
-	 memcpy(type_array_buffer_tgt_pos, type_array_buffer_src_pos, cmpr_size);
+	 memmove(type_array_buffer_tgt_pos, type_array_buffer_src_pos, cmpr_size);
 	 type_array_buffer_src_pos += sizes->max_num_block_elements;
 	 type_array_buffer_tgt_pos += cmpr_size;
   }
@@ -341,6 +341,8 @@ save_unpredictable_data(sz_opencl_sizes const* sizes,
     } // end j
   }   // end i
   
+  free(reg_params_pos_index);
+
   //TODO: compute the total_unpred;
   size_t first_unpred_count = blockwise_unpred_count[0];
   total_unpred += first_unpred_count;
