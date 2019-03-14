@@ -352,7 +352,7 @@ save_unpredictable_data(sz_opencl_sizes const* sizes,
   {
 	  size_t unpred_count = blockwise_unpred_count[i];
 	  total_unpred += unpred_count;
-	  memcpy(tgt_pos, src_pos, unpred_count*sizeof(float));
+	  memmove(tgt_pos, src_pos, unpred_count*sizeof(float));
 	  src_pos += sizes->max_num_block_elements;
 	  tgt_pos += unpred_count;
   } 
