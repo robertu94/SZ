@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.10.3)
-project (sz LANGUAGES C CXX CUDA)
+project (sz LANGUAGES C CXX)
 enable_testing()
 
 set(CMAKE_C_STANDARD 99)

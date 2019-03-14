@@ -16,6 +16,10 @@ endif()
 option(SZ_OPENCL_USE_OPENMP "Use OpenMP implementations instead of OpenCL for debugging")
 option(SZ_OPENCL_USE_CUDA "Use CUDA implementations instead of OpenCL for debugging")
 
+if(SZ_OPENCL_USE_CUDA)
+  enable_language(CUDA)
+endif()
+
 
 
 configure_file (${CMAKE_CURRENT_SOURCE_DIR}/include/sz_opencl_config.h.in
