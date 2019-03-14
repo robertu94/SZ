@@ -146,7 +146,7 @@ make_sz_opencl_sizes(cl_ulong block_size, cl_ulong r1, cl_ulong r2, cl_ulong r3)
   sizes.params_offset_b=sizes.num_blocks;
   sizes.params_offset_c=2 * sizes.num_blocks;
   sizes.params_offset_d=3 * sizes.num_blocks;
-  sizes.pred_buffer_block_size=sizes.block_size + 1;
+  sizes.pred_buffer_block_size=sizes.block_size;
   sizes.strip_dim0_offset=sizes.pred_buffer_block_size * sizes.pred_buffer_block_size;
   sizes.strip_dim1_offset=sizes.pred_buffer_block_size;
   sizes.unpred_data_max_size=sizes.max_num_block_elements;
