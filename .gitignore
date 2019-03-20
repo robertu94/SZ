@@ -7,3 +7,5 @@ CMakeFiles/
 Testing/
 .idea/
 cscope.out
+.project
+.cproject

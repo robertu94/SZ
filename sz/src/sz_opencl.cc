@@ -616,8 +616,7 @@ decompress_all_blocks(const sz_opencl_sizes& sizes,
                       float*& dec_block_data)
 {
   dec_block_data =
-    (float*)calloc(sizeof(float), (pos.num_data_blocks1) * sizes.block_size *
-                                    pos.dec_block_dim0_offset);
+    (float*)calloc(sizeof(float), pos.dec_block_data_size);
   //TODO there is a data dependancy on one of the pointers passed
   #pragma omp parallel for collapse(3)
   for (size_t i = pos.start_block1; i < pos.end_block1; i++) {
@@ -663,6 +662,32 @@ namespace {
     if(env_value == nullptr) return default_value;
     else return env_value;
   }
+}
+
+void copy_block_data(float **data,
+                     const sz_opencl_sizes &sizes,
+                     const sz_opencl_decompress_positions &pos,
+                     const float *dec_block_data) {// extract data
+
+#if SZ_OPENCL_USE_CUDA
+  copy_block_data_host(data, pos, dec_block_data);
+#else
+
+  *data = (float*)malloc(sizeof(cl_float) * pos.data_buffer_size);
+
+
+  //TODO parallelize this loop
+#pragma omp parallel for collapse(2)
+  for (cl_ulong i = 0; i < pos.data_elms1; i++) {
+    for (cl_ulong j = 0; j < pos.data_elms2; j++) {
+      const float* block_data_pos = dec_block_data + (i + pos.resi_x) * pos.dec_block_dim0_offset + (j + pos.resi_y) * pos.dec_block_dim1_offset + pos.resi_z;
+      float* final_data_pos = *data + i*pos.data_elms2*pos.data_elms3 + j * pos.data_elms3;
+      for (cl_ulong k = 0; k < pos.data_elms3; k++) {
+        *(final_data_pos++) = *(block_data_pos++);
+      }
+    }
+  }
+#endif
 }
 
 extern "C"
@@ -1265,27 +1290,7 @@ extern "C"
     free(indicator);
     free(result_type);
 
-    // extract data
-    int resi_x = s1 % sizes.block_size;
-    int resi_y = s2 % sizes.block_size;
-    int resi_z = s3 % sizes.block_size;
-    *data = (float*)malloc(sizeof(cl_float) * pos.data_buffer_size);
-
-		#
-
-    //TODO parallelize this loop
-    #pragma omp parallel for collapse(2)
-    for (cl_ulong i = 0; i < pos.data_elms1; i++) {
-      for (cl_ulong j = 0; j < pos.data_elms2; j++) {
-        float* block_data_pos =
-          dec_block_data + (i + resi_x) * pos.dec_block_dim0_offset +
-          (j + resi_y) * pos.dec_block_dim1_offset + resi_z;
-	float* final_data_pos = *data + i*pos.data_elms2*pos.data_elms3 + j * pos.data_elms3;
-        for (cl_ulong k = 0; k < pos.data_elms3; k++) {
-          *(final_data_pos++) = *(block_data_pos++);
-        }
-      }
-    }
+    copy_block_data(data, sizes, pos, dec_block_data);
 
     free(dec_block_data);
   }

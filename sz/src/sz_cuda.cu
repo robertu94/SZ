@@ -99,7 +99,6 @@ calculate_regression_coefficents_host(
   float* reg_params_d;
   float* pred_buffer_d;
 
-  std::cout << "cuda" << std::endl;
   CUDA_SAFE_CALL(cudaMalloc(&oriData_d, sizeof(cl_float) * sizes->num_elements));
   CUDA_SAFE_CALL(cudaMalloc(&sizes_d, sizeof(sz_opencl_sizes)));
   CUDA_SAFE_CALL(cudaMalloc(&reg_params_d, sizeof(cl_float) * sizes->reg_params_buffer_size));
@@ -107,8 +106,6 @@ calculate_regression_coefficents_host(
 
   CUDA_SAFE_CALL(cudaMemcpy(oriData_d, oriData, sizeof(cl_float) * sizes->num_elements, cudaMemcpyHostToDevice));
   CUDA_SAFE_CALL(cudaMemcpy(sizes_d, sizes, sizeof(struct sz_opencl_sizes), cudaMemcpyHostToDevice));
-  //CUDA_SAFE_CALL(cudaMemset(reg_params_d, 0, sizeof(cl_float) * sizes->reg_params_buffer_size));
-  //CUDA_SAFE_CALL(cudaMemset(pred_buffer_d, 0, sizeof(cl_float) * sizes->num_blocks * sizes->max_num_block_elements));
 
   CUDA_SAFE_KERNEL_CALL((calculate_regression_coefficents_kernel<<<grid_size, block_size>>>(oriData_d, sizes_d, reg_params_d, pred_buffer_d)));
 
@@ -121,3 +118,61 @@ calculate_regression_coefficents_host(
   CUDA_SAFE_CALL(cudaFree(pred_buffer_d));
 }
 
+__global__
+void copy_block_data_kernel(
+    float* data,
+    sz_opencl_decompress_positions const* pos,
+    float const * dec_block_data
+    ) {
+
+  unsigned long i = threadIdx.x + blockIdx.x * blockDim.x;//get_global_id(0);
+  unsigned long j = threadIdx.y + blockIdx.y * blockDim.y;//get_global_id(1);
+  if(i < pos->data_elms1 && j < pos->data_elms2) {
+    const float *block_data_pos =
+        dec_block_data + (i + pos->resi_x) * pos->dec_block_dim0_offset + (j + pos->resi_y) * pos->dec_block_dim1_offset
+            + pos->resi_z;
+    float *final_data_pos = data + i * pos->data_elms2 * pos->data_elms3 + j * pos->data_elms3;
+    for (cl_ulong k = 0; k < pos->data_elms3; k++) {
+      *(final_data_pos++) = *(block_data_pos++);
+    }
+  }
+}
+
+
+void copy_block_data_host(float **data,
+                     const sz_opencl_decompress_positions &pos,
+                     const float *dec_block_data) {// extract data
+  *data = (float*)malloc(sizeof(cl_float) * pos.data_buffer_size);
+
+  float* data_d;
+  float* dec_block_data_d;
+  sz_opencl_decompress_positions* pos_d;
+
+  int deviceNum;
+  unsigned int maxBlockSize2;
+  cudaGetDevice(&deviceNum);
+  cudaDeviceGetAttribute((int*)&maxBlockSize2, cudaDevAttrMaxThreadsPerBlock, deviceNum);
+  maxBlockSize2 = floor(sqrt(maxBlockSize2));
+
+
+  dim3 block_size(maxBlockSize2,maxBlockSize2);
+  dim3 grid_size(pos.data_elms1/maxBlockSize2 + 1, pos.data_elms2/maxBlockSize2 + 1);
+
+  CUDA_SAFE_CALL(cudaMalloc(&data_d, sizeof(cl_float)* pos.data_buffer_size));
+  CUDA_SAFE_CALL(cudaMalloc(&dec_block_data_d, sizeof(cl_float) *pos.dec_block_data_size));
+  CUDA_SAFE_CALL(cudaMalloc(&pos_d, sizeof(sz_opencl_decompress_positions)));
+
+  CUDA_SAFE_CALL(cudaMemcpy(pos_d, &pos, sizeof(struct sz_opencl_decompress_positions), cudaMemcpyHostToDevice));
+  CUDA_SAFE_CALL(cudaMemcpy(dec_block_data_d, dec_block_data, sizeof(cl_float)* pos.dec_block_data_size, cudaMemcpyHostToDevice));
+  //do not copy data since we just malloc'ed it
+
+  CUDA_SAFE_KERNEL_CALL((copy_block_data_kernel<<<grid_size,block_size>>>(data_d, pos_d, dec_block_data_d)));
+
+  CUDA_SAFE_CALL(cudaMemcpy(*data, data_d, sizeof(cl_float) * pos.data_buffer_size, cudaMemcpyDeviceToHost));
+  //do not copy sizes_d or pos_d, or dec_block_data_d back because they are const
+
+  CUDA_SAFE_CALL(cudaFree(data_d));
+  CUDA_SAFE_CALL(cudaFree(pos_d));
+  CUDA_SAFE_CALL(cudaFree(dec_block_data_d));
+
+}

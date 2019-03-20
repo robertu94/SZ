@@ -70,7 +70,11 @@ struct sz_opencl_decompress_positions {
   data_elms3(e3-s3),
   data_buffer_size(data_elms1 * data_elms2 * data_elms3),
   dec_block_dim1_offset(num_data_blocks3 * block_size),
-  dec_block_dim0_offset(dec_block_dim1_offset * num_data_blocks2 * block_size)
+  dec_block_dim0_offset(dec_block_dim1_offset * num_data_blocks2 * block_size),
+  dec_block_data_size(num_data_blocks1 * block_size * dec_block_dim0_offset),
+  resi_x(s1 % block_size),
+  resi_y(s2 % block_size),
+  resi_z(s3 % block_size)
   {}
 
 #endif
@@ -83,6 +87,8 @@ struct sz_opencl_decompress_positions {
   const cl_ulong data_buffer_size;
   const cl_ulong dec_block_dim1_offset;
   const cl_ulong dec_block_dim0_offset;
+  const cl_ulong dec_block_data_size;
+  const cl_int resi_x, resi_y, resi_z;
 };
 
 struct sz_opencl_coefficient_sizes {
