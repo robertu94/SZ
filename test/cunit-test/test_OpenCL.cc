@@ -8,6 +8,7 @@
 #include "RegressionTest.hpp"
 
 #include "sz.h"
+#include "sz_opencl_config.h"
 #include "zlib.h"
 
 namespace {
@@ -17,24 +18,34 @@ namespace {
 extern "C" {
 int init_suite()
 {
+#if !SZ_OPENCL_USE_CUDA
 	int rc = sz_opencl_init(&state);
 	rc |= sz_opencl_error_code(state);
 	const char* msg = sz_opencl_error_msg(state);
 	if(rc) fprintf(stderr,"WARNING - %s\n", msg);
 	return rc;
+#else
+	return 0;
+#endif
 }
 
 int clean_suite()
 {
+#if !SZ_OPENCL_USE_CUDA
 	int rc = sz_opencl_release(&state);
 	return rc;
+#else
+	return 0;
+#endif
 }
 
 
 void test_valid_opencl()
 {
+#if !SZ_OPENCL_USE_CUDA
 	int rc = sz_opencl_check(state);
 	CU_ASSERT_EQUAL(rc, 0);
+#endif
 }
 
 void test_identical_opencl_impl()

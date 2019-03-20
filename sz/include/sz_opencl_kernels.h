@@ -18,9 +18,9 @@ struct sz_opencl_sizes
 {
   cl_ulong r1, r2, r3;
   cl_ulong block_size;
-  cl_ulong num_x;
-  cl_ulong num_y;
-  cl_ulong num_z;
+  cl_uint num_x;
+  cl_uint num_y;
+  cl_uint num_z;
   cl_ulong max_num_block_elements;
   cl_ulong num_blocks;
   cl_ulong num_elements;

@@ -87,6 +87,7 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
   memcpy(result_pos, compressed_type_array_block,
          compressed_type_array_block_size);
   result_pos += compressed_type_array_block_size;
+
   memcpy(result_pos, type_array_buffer, total_type_array_size);
   result_pos += total_type_array_size;
 
@@ -104,8 +105,13 @@ calculate_regression_coefficents(struct sz_opencl_state* state,
                                  cl_float* const pred_buffer)
 {
 #if SZ_OPENCL_USE_CUDA
-  calculate_regression_coefficents_host(oriData, sizes, reg_params, pred_buffer);  
-#elif SZ_OPENCL_USE_OPENMP
+	std::vector<float> oriData_cuda (oriData, oriData + sizes->num_elements);
+	std::vector<float> reg_params_cuda (reg_params, reg_params + sizes->reg_params_buffer_size);
+	std::vector<float> pred_buffer_cuda (pred_buffer, pred_buffer + (sizes->num_blocks * sizes->max_num_block_elements));
+
+  calculate_regression_coefficents_host(oriData_cuda.data(), sizes, reg_params_cuda.data(), pred_buffer_cuda.data());  
+#endif
+
 #pragma omp parallel for collapse(3)
 for (cl_ulong i = 0; i < sizes->num_x; i++) {
   for (cl_ulong j = 0; j < sizes->num_y; j++) {
@@ -155,30 +161,7 @@ for (cl_ulong i = 0; i < sizes->num_x; i++) {
     }
   }
 }
-    
-#else
-  std::vector<buffer_copy_info> buffer_info = {
-    { (void*)oriData, sizeof(cl_float) * sizes->num_elements,
-      CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
-    { (void*)sizes, sizeof(sz_opencl_sizes),
-      CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
-    { (void*)reg_params, sizeof(cl_float) * sizes->reg_params_buffer_size,
-      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
-    { (void*)pred_buffer, sizeof(cl_float) * sizes->pred_buffer_size,
-      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, copy_mode::TO_FROM },
-  };
 
-
-  auto& kernel = state->calculate_regression_coefficents;
-  run_kernel(kernel, cl::NDRange(sizes->num_x, sizes->num_y, sizes->num_z),
-             state, sizes, buffer_info);
-  state->queue.finish();
-  printf("host %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f\n", oriData[0], oriData[1], oriData[2], oriData[sizes->num_elements-3],
-      oriData[sizes->num_elements-2], oriData[sizes->num_elements-1]);
-  printf("host sizes %lu %lu\n", sizes->num_elements, sizes->num_x);
-  printf("=========\n");
-
-#endif
 }
 
 size_t
@@ -265,7 +248,6 @@ save_unpredictable_data(sz_opencl_sizes const* sizes,
         } else {
           // use SZ
           // SZ predication
-          size_t unpredictable_count = 0;
           float* cur_data_pos = data_pos;
           float curData;
           float pred3D;
@@ -879,19 +861,9 @@ extern "C"
       sizes.unpred_data_max_size * sizeof(cl_float) * sizes.num_blocks);
     cl_float* reg_params =
       (cl_float*)malloc(sizeof(cl_float) * sizes.reg_params_buffer_size);
-    // cl_float* pred_buffer =
-    //   (cl_float*)malloc(sizeof(cl_float) * sizes.pred_buffer_size);
     cl_float* data_buffer =
       (cl_float*)malloc(sizeof(cl_float) * sizes.num_blocks * sizes.max_num_block_elements);
 
-    cl_ulong data_buffer_dims[3];
-    data_buffer_dims[0] = sizes.num_x * sizes.block_size;
-    data_buffer_dims[1] = sizes.num_y * sizes.block_size;
-    data_buffer_dims[2] = sizes.num_z * sizes.block_size;
-    cl_ulong data_buffer_offset[3];
-    data_buffer_offset[0] = data_buffer_dims[1] * data_buffer_dims[2];
-    data_buffer_offset[1] = data_buffer_dims[1];
-    data_buffer_offset[2] = 1;
 
     // copy data with padding
     #pragma omp parallel for collapse(3)
@@ -922,15 +894,10 @@ extern "C"
       (unsigned char*)calloc(sizes.num_blocks, sizeof(unsigned char));
     int* blockwise_unpred_count = (int*)malloc(sizes.num_blocks * sizeof(int));
 
-    float* data_pos = oriData;
     int* type = result_type;
-    float* pred_buffer_pos = NULL;
     int* blockwise_unpred_count_pos = blockwise_unpred_count;
 
-    // calculate_regression_coefficents(state, oriData, &sizes, reg_params,
-    //                                  pred_buffer);
-    calculate_regression_coefficents(state, oriData, &sizes, reg_params,
-                                     data_buffer);
+    calculate_regression_coefficents(state, oriData, &sizes, reg_params, data_buffer);
 
     float mean = 0.0f;
     if (exe_params->optQuantMode == 1) {
@@ -954,8 +921,6 @@ extern "C"
     float* unpredictable_data = result_unpredictable_data;
     unsigned char* indicator_pos = indicator;
 
-    int intvCapacity = exe_params->intvCapacity;
-    int intvRadius = exe_params->intvRadius;
     float noise = realPrecision * 1.22;
     float* reg_params_pos = reg_params;
 
@@ -1287,7 +1252,6 @@ extern "C"
     SZ_ReleaseHuffman(huffmanTree);
     free(type_array_offset);
 
-    float* decompression_buffer;
     float* dec_block_data;
     decompress_all_blocks(sizes, realPrecision, mean, use_mean, indicator,
                           reg_params, intvRadius, unpred_offset, unpred_data,
@@ -1306,6 +1270,9 @@ extern "C"
     int resi_y = s2 % sizes.block_size;
     int resi_z = s3 % sizes.block_size;
     *data = (float*)malloc(sizeof(cl_float) * pos.data_buffer_size);
+
+		#
+
     //TODO parallelize this loop
     #pragma omp parallel for collapse(2)
     for (cl_ulong i = 0; i < pos.data_elms1; i++) {
@@ -1319,6 +1286,7 @@ extern "C"
         }
       }
     }
+
     free(dec_block_data);
   }
 
