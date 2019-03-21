@@ -1,7 +1,38 @@
 #include "cuda.h"
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 #include "cuda_runtime_api.h"
 #include "sz_opencl_kernels.h"
+
+#define CUDA_SAFE_CALL(call) {                                    \
+  cudaError err = call;                                                    \
+  if( cudaSuccess != err) {                                                \
+    fprintf(stderr, "Cuda error in file '%s' in line %i : %s.\n",        \
+        __FILE__, __LINE__, cudaGetErrorString( err) );              \
+    exit(EXIT_FAILURE);                                                  \
+  } \
+}
+
+
+#define CUDA_SAFE_KERNEL_CALL(call) {                                    \
+	call; \
+	cudaError_t err = cudaGetLastError(); \
+  if( cudaSuccess != err) {                                                \
+    fprintf(stderr, "Cuda error in file '%s' in line %i : %s.\n",        \
+        __FILE__, __LINE__, cudaGetErrorString( err) );              \
+    exit(EXIT_FAILURE);                                                  \
+  } \
+}
+
+template <class  T, class U>
+auto integer_divide_up(T a, U b) {
+  size_t val = (a % b != 0) ? (a/b+1) : (a/b);
+  if(val > std::numeric_limits<T>::max())
+    throw std::domain_error("invalid integer division");
+  else return val;
+}
+
 
 __global__ void
 calculate_regression_coefficents_kernel(
@@ -58,26 +89,6 @@ calculate_regression_coefficents_kernel(
 		}
 }
 
-#define CUDA_SAFE_CALL(call) {                                    \
-  cudaError err = call;                                                    \
-  if( cudaSuccess != err) {                                                \
-    fprintf(stderr, "Cuda error in file '%s' in line %i : %s.\n",        \
-        __FILE__, __LINE__, cudaGetErrorString( err) );              \
-    exit(EXIT_FAILURE);                                                  \
-  } \
-}
-
-
-#define CUDA_SAFE_KERNEL_CALL(call) {                                    \
-	call; \
-	cudaError_t err = cudaGetLastError(); \
-  if( cudaSuccess != err) {                                                \
-    fprintf(stderr, "Cuda error in file '%s' in line %i : %s.\n",        \
-        __FILE__, __LINE__, cudaGetErrorString( err) );              \
-    exit(EXIT_FAILURE);                                                  \
-  } \
-}
-
 void
 calculate_regression_coefficents_host(
         const cl_float* oriData,
@@ -102,7 +113,7 @@ calculate_regression_coefficents_host(
   CUDA_SAFE_CALL(cudaMalloc(&oriData_d, sizeof(cl_float) * sizes->num_elements));
   CUDA_SAFE_CALL(cudaMalloc(&sizes_d, sizeof(sz_opencl_sizes)));
   CUDA_SAFE_CALL(cudaMalloc(&reg_params_d, sizeof(cl_float) * sizes->reg_params_buffer_size));
-  CUDA_SAFE_CALL(cudaMalloc(&pred_buffer_d, sizeof(cl_float) * sizes->num_blocks * sizes->max_num_block_elements));
+  CUDA_SAFE_CALL(cudaMalloc(&pred_buffer_d, sizeof(cl_float) * sizes->data_buffer_size));
 
   CUDA_SAFE_CALL(cudaMemcpy(oriData_d, oriData, sizeof(cl_float) * sizes->num_elements, cudaMemcpyHostToDevice));
   CUDA_SAFE_CALL(cudaMemcpy(sizes_d, sizes, sizeof(struct sz_opencl_sizes), cudaMemcpyHostToDevice));
@@ -110,7 +121,7 @@ calculate_regression_coefficents_host(
   CUDA_SAFE_KERNEL_CALL((calculate_regression_coefficents_kernel<<<grid_size, block_size>>>(oriData_d, sizes_d, reg_params_d, pred_buffer_d)));
 
   CUDA_SAFE_CALL(cudaMemcpy(reg_params, reg_params_d, sizeof(cl_float) * sizes->reg_params_buffer_size, cudaMemcpyDeviceToHost));
-  CUDA_SAFE_CALL(cudaMemcpy(pred_buffer, pred_buffer_d, sizeof(cl_float) * sizes->num_blocks * sizes->max_num_block_elements, cudaMemcpyDeviceToHost));
+  CUDA_SAFE_CALL(cudaMemcpy(pred_buffer, pred_buffer_d, sizeof(cl_float) * sizes->data_buffer_size, cudaMemcpyDeviceToHost));
 
   CUDA_SAFE_CALL(cudaFree(oriData_d));
   CUDA_SAFE_CALL(cudaFree(sizes_d));
@@ -156,7 +167,7 @@ void copy_block_data_host(float **data,
 
 
   dim3 block_size(maxBlockSize2,maxBlockSize2);
-  dim3 grid_size(pos.data_elms1/maxBlockSize2 + 1, pos.data_elms2/maxBlockSize2 + 1);
+  dim3 grid_size(pos.data_elms1/maxBlockSize2+1, pos.data_elms2/maxBlockSize2+1);
 
   CUDA_SAFE_CALL(cudaMalloc(&data_d, sizeof(cl_float)* pos.data_buffer_size));
   CUDA_SAFE_CALL(cudaMalloc(&dec_block_data_d, sizeof(cl_float) *pos.dec_block_data_size));
@@ -174,5 +185,186 @@ void copy_block_data_host(float **data,
   CUDA_SAFE_CALL(cudaFree(data_d));
   CUDA_SAFE_CALL(cudaFree(pos_d));
   CUDA_SAFE_CALL(cudaFree(dec_block_data_d));
+
+}
+
+__global__
+void prepare_data_buffer_kernel(const float *oriData, const sz_opencl_sizes *sizes, cl_float *data_buffer) {
+  unsigned long i = threadIdx.x + blockIdx.x * blockDim.x;//get_global_id(0);
+  unsigned long j = threadIdx.y + blockIdx.y * blockDim.y;//get_global_id(1);
+  unsigned long k = threadIdx.z + blockIdx.z * blockDim.z;//get_global_id(2);
+  unsigned int block_id = i * (sizes->num_y * sizes->num_z) + j * sizes->num_z + k;
+
+  if(block_id < sizes->num_blocks) {
+    cl_float *data_buffer_location = data_buffer + block_id * sizes->max_num_block_elements;
+    for (unsigned int ii = 0; ii < sizes->block_size; ii++) {
+      for (unsigned int jj = 0; jj < sizes->block_size; jj++) {
+        for (unsigned int kk = 0; kk < sizes->block_size; kk++) {
+          // index in origin data
+          cl_ulong i_ = i * sizes->block_size + ii;
+          cl_ulong j_ = j * sizes->block_size + jj;
+          cl_ulong k_ = k * sizes->block_size + kk;
+          i_ = (i_ < sizes->r1) ? i_ : sizes->r1 - 1;
+          j_ = (j_ < sizes->r2) ? j_ : sizes->r2 - 1;
+          k_ = (k_ < sizes->r3) ? k_ : sizes->r3 - 1;
+          data_buffer_location[ii * sizes->block_size * sizes->block_size + jj * sizes->block_size + kk] =
+              oriData[i_ * sizes->r2 * sizes->r3 + j_ * sizes->r3 + k_];
+        }
+      }
+    }
+  }
+}
+
+
+void prepare_data_buffer_host(float const *oriData, sz_opencl_sizes const *sizes, cl_float *data_buffer) {
+  float* oriData_d;
+  sz_opencl_sizes* sizes_d;
+  float* data_buffer_d;
+
+  int deviceNum;
+  unsigned int maxBlockSize;
+  cudaGetDevice(&deviceNum);
+  cudaDeviceGetAttribute((int*)&maxBlockSize, cudaDevAttrMaxThreadsPerBlock, deviceNum);
+  maxBlockSize = floor(cbrt(maxBlockSize));
+
+
+  dim3 block_size{maxBlockSize,maxBlockSize,maxBlockSize};
+  dim3 grid_size(integer_divide_up(sizes->num_x,maxBlockSize), integer_divide_up(sizes->num_y,maxBlockSize), integer_divide_up(sizes->num_z, maxBlockSize));
+
+
+  CUDA_SAFE_CALL(cudaMalloc(&oriData_d, sizeof(cl_float) * sizes->num_elements));
+  CUDA_SAFE_CALL(cudaMalloc(&sizes_d, sizeof(sz_opencl_sizes)));
+  CUDA_SAFE_CALL(cudaMalloc(&data_buffer_d, sizeof(cl_float) * sizes->num_blocks * sizes->max_num_block_elements));
+
+  CUDA_SAFE_CALL(cudaMemcpy(oriData_d, oriData, sizeof(cl_float) * sizes->num_elements, cudaMemcpyHostToDevice));
+  CUDA_SAFE_CALL(cudaMemcpy(sizes_d, sizes, sizeof(struct sz_opencl_sizes), cudaMemcpyHostToDevice));
+  //do not copy data buffer since it is created in this function
+
+  CUDA_SAFE_KERNEL_CALL((prepare_data_buffer_kernel<<<grid_size, block_size>>>(oriData_d, sizes_d, data_buffer_d)));
+
+  CUDA_SAFE_CALL(cudaMemcpy(data_buffer, data_buffer_d, sizeof(cl_float) * sizes->num_blocks * sizes->max_num_block_elements, cudaMemcpyDeviceToHost));
+  //do not copy sizes_d or oriData_d since they are const copied
+
+  CUDA_SAFE_CALL(cudaFree(oriData_d));
+  CUDA_SAFE_CALL(cudaFree(sizes_d));
+  CUDA_SAFE_CALL(cudaFree(data_buffer_d));
+}
+
+__device__
+void
+compute_errors_kernel(const float* reg_params_pos, const float* data_buffer,
+               sz_opencl_sizes const* sizes, float mean, float noise,
+               bool use_mean, size_t i, size_t j, size_t k,
+               float& err_sz, float& err_reg)
+{
+  const float* cur_data_pos =
+      data_buffer +
+          i * sizes->block_size * sizes->block_size +
+          j * sizes->block_size + k;
+  float curData = *cur_data_pos;
+  float pred_sz =
+      cur_data_pos[-1] + cur_data_pos[-sizes->strip_dim1_offset] +
+          cur_data_pos[-sizes->strip_dim0_offset] -
+          cur_data_pos[-sizes->strip_dim1_offset - 1] -
+          cur_data_pos[-sizes->strip_dim0_offset - 1] -
+          cur_data_pos[-sizes->strip_dim0_offset - sizes->strip_dim1_offset] +
+          cur_data_pos[-sizes->strip_dim0_offset - sizes->strip_dim1_offset - 1];
+  float pred_reg = reg_params_pos[0] * i +
+      reg_params_pos[sizes->params_offset_b] * j +
+      reg_params_pos[sizes->params_offset_c] * k +
+      reg_params_pos[sizes->params_offset_d];
+  if (use_mean) {
+    err_sz += min(fabs(pred_sz - curData) + noise, fabs(mean - curData));
+    err_reg += fabs(pred_reg - curData);
+  } else {
+    err_sz += fabs(pred_sz - curData) + noise;
+    err_reg += fabs(pred_reg - curData);
+  }
+}
+
+
+__global__
+void
+opencl_sample_kernel(const sz_opencl_sizes* sizes,
+                     float mean,
+                     float noise,
+                     bool use_mean,
+                     const float* data_buffer,
+                     const float* reg_params_pos,
+                     unsigned char* indicator_pos
+) {
+  unsigned long i = threadIdx.x + blockIdx.x * blockDim.x;//get_global_id(0);
+  unsigned long j = threadIdx.y + blockIdx.y * blockDim.y;//get_global_id(1);
+  unsigned long k = threadIdx.z + blockIdx.z * blockDim.z;//get_global_id(2);
+  const unsigned int block_id = i * (sizes->num_y * sizes->num_z) + j * sizes->num_z + k;
+  if(block_id < sizes->num_blocks) {
+    const float *data_pos = data_buffer + (block_id * sizes->max_num_block_elements);
+    /*sampling and decide which predictor*/
+    {
+      // sample point [1, 1, 1] [1, 1, 4] [1, 4, 1] [1, 4, 4] [4, 1, 1] [4,
+      // 1, 4] [4, 4, 1] [4, 4, 4]
+      float err_sz = 0.0, err_reg = 0.0;
+      for (size_t block_i = 1; block_i < sizes->block_size; block_i++) {
+        int bmi = sizes->block_size - block_i;
+        compute_errors_kernel(&reg_params_pos[block_id], data_pos, sizes, mean, noise,
+                              use_mean, block_i, block_i, block_i, err_sz,
+                              err_reg);
+        compute_errors_kernel(&reg_params_pos[block_id], data_pos, sizes, mean, noise,
+                              use_mean, block_i, block_i, bmi, err_sz, err_reg);
+
+        compute_errors_kernel(&reg_params_pos[block_id], data_pos, sizes, mean, noise,
+                              use_mean, block_i, bmi, block_i, err_sz, err_reg);
+
+        compute_errors_kernel(&reg_params_pos[block_id], data_pos, sizes, mean, noise,
+                              use_mean, block_i, bmi, bmi, err_sz, err_reg);
+      }
+      indicator_pos[(i * sizes->num_y + j) * sizes->num_z + k] = err_reg >= err_sz;
+    }
+  }
+}
+
+void
+opencl_sample_host(const sz_opencl_sizes* sizes,
+              float mean,
+              float noise,
+              bool use_mean,
+              const float* data_buffer,
+              const float* reg_params_pos,
+              unsigned char* indicator_pos
+)
+{
+  int deviceNum;
+  unsigned int maxBlockSize;
+  cudaGetDevice(&deviceNum);
+  cudaDeviceGetAttribute((int*)&maxBlockSize, cudaDevAttrMaxThreadsPerBlock, deviceNum);
+  maxBlockSize = floor(cbrt(maxBlockSize));
+
+  dim3 block_size{maxBlockSize,maxBlockSize,maxBlockSize};
+  dim3 grid_size(integer_divide_up(sizes->num_x,maxBlockSize), integer_divide_up(sizes->num_y,maxBlockSize), integer_divide_up(sizes->num_z, maxBlockSize));
+
+  sz_opencl_sizes* sizes_d;
+  float* data_buffer_d;
+  float* reg_params_pos_d;
+  unsigned char* indicator_pos_d;
+
+  CUDA_SAFE_CALL(cudaMalloc(&data_buffer_d, sizeof(cl_float) * sizes->data_buffer_size));
+  CUDA_SAFE_CALL(cudaMalloc(&sizes_d, sizeof(sz_opencl_sizes)));
+  CUDA_SAFE_CALL(cudaMalloc(&reg_params_pos_d, sizeof(cl_float) * sizes->reg_params_buffer_size));
+  CUDA_SAFE_CALL(cudaMalloc(&indicator_pos_d, sizes->num_blocks * sizeof(unsigned char)));
+
+  CUDA_SAFE_CALL(cudaMemcpy(data_buffer_d, data_buffer, sizeof(cl_float) * sizes->data_buffer_size, cudaMemcpyHostToDevice));
+  CUDA_SAFE_CALL(cudaMemcpy(sizes_d, sizes, sizeof(sz_opencl_sizes), cudaMemcpyHostToDevice));
+  CUDA_SAFE_CALL(cudaMemcpy(reg_params_pos_d, reg_params_pos, sizeof(cl_float) * sizes->reg_params_buffer_size, cudaMemcpyHostToDevice));
+  CUDA_SAFE_CALL(cudaMemcpy(indicator_pos_d, indicator_pos, sizes->num_blocks * sizeof(unsigned char), cudaMemcpyHostToDevice));
+
+  CUDA_SAFE_KERNEL_CALL((opencl_sample_kernel<<<grid_size,block_size>>>(sizes_d, mean, noise, use_mean, data_buffer_d, reg_params_pos_d, indicator_pos_d)));
+
+  CUDA_SAFE_CALL(cudaMemcpy(indicator_pos, indicator_pos_d, sizes->num_blocks * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+
+  CUDA_SAFE_CALL(cudaFree(data_buffer_d));
+  CUDA_SAFE_CALL(cudaFree(sizes_d));
+  CUDA_SAFE_CALL(cudaFree(reg_params_pos_d));
+  CUDA_SAFE_CALL(cudaFree(indicator_pos_d));
+
 
 }

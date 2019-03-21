@@ -49,7 +49,8 @@ encode_all_blocks(sz_opencl_sizes const* sizes, int* result_type, int* type,
     (unsigned short*)malloc(sizes->num_blocks * sizeof(unsigned short));
   
   size_t num_yz = sizes->num_y*sizes->num_z;
-  //TODO parallelize this loop
+  //don't parallelize this loop with GPU, encode function doesn't preform well on GPU
+  //use new encoders with OpenCL/CUDA when available
   #pragma omp parallel for collapse(3)
   for (size_t i = 0; i < sizes->num_x; i++) {
     for (size_t j = 0; j < sizes->num_y; j++) {
@@ -383,6 +384,10 @@ opencl_sample(const sz_opencl_sizes* sizes,
     unsigned char* indicator_pos
     )
 {
+#if SZ_OPENCL_USE_CUDA
+  opencl_sample_host(sizes, mean, noise, use_mean, data_buffer, reg_params_pos, indicator_pos);
+#else
+
 //TODO refactor pred_buffer  to be loop independent
 #pragma omp parallel for collapse(3) 
   for (size_t i = 0; i < sizes->num_x; i++) {
@@ -414,6 +419,7 @@ opencl_sample(const sz_opencl_sizes* sizes,
       }// end k
     }// end j
   }// end i
+#endif
 }
 
 void
@@ -690,6 +696,39 @@ void copy_block_data(float **data,
 #endif
 }
 
+void prepare_data_buffer(const float *oriData, const sz_opencl_sizes &sizes, cl_float *data_buffer) {
+#if SZ_OPENCL_USE_CUDA
+  std::vector<float> oriData_cuda(oriData, oriData+sizes.num_elements);
+  std::vector<float> data_buffer_cuda(sizes.num_blocks * sizes.max_num_block_elements);
+
+  prepare_data_buffer_host(oriData_cuda.data(), &sizes, data_buffer_cuda.data());
+#endif
+
+#pragma omp parallel for collapse(3)
+  for (cl_ulong i = 0; i < sizes.num_x; i++) {
+      for (cl_ulong j = 0; j < sizes.num_y; j++) {
+        for (cl_ulong k = 0; k < sizes.num_z; k++) {
+          unsigned int block_id = i * (sizes.num_y * sizes.num_z) + j * sizes.num_z + k;
+          cl_float* data_buffer_location = data_buffer + block_id * sizes.max_num_block_elements;
+          for(unsigned int ii=0; ii<sizes.block_size; ii++){
+            for(unsigned int jj=0; jj<sizes.block_size; jj++){
+              for(unsigned int kk=0; kk<sizes.block_size; kk++){
+                // index in origin data
+                cl_ulong i_ = i * sizes.block_size + ii;
+                cl_ulong j_ = j * sizes.block_size + jj;
+                cl_ulong k_ = k * sizes.block_size + kk;
+                i_ = (i_ < sizes.r1) ? i_ : sizes.r1 - 1;
+                j_ = (j_ < sizes.r2) ? j_ : sizes.r2 - 1;
+                k_ = (k_ < sizes.r3) ? k_ : sizes.r3 - 1;
+                data_buffer_location[ii * sizes.block_size * sizes.block_size + jj * sizes.block_size + kk] = oriData[i_ * sizes.r2 * sizes.r3 + j_ * sizes.r3 + k_];
+              }
+            }
+          }
+        }
+      }
+    }
+}
+
 extern "C"
 {
   int sz_opencl_init(struct sz_opencl_state** state)
@@ -889,31 +928,7 @@ extern "C"
     cl_float* data_buffer =
       (cl_float*)malloc(sizeof(cl_float) * sizes.num_blocks * sizes.max_num_block_elements);
 
-
-    // copy data with padding
-    #pragma omp parallel for collapse(3)
-    for (cl_ulong i = 0; i < sizes.num_x; i++) {
-      for (cl_ulong j = 0; j < sizes.num_y; j++) {
-        for (cl_ulong k = 0; k < sizes.num_z; k++) {
-          unsigned int block_id = i * (sizes.num_y * sizes.num_z) + j * sizes.num_z + k;
-          cl_float* data_buffer_location = data_buffer + block_id * sizes.max_num_block_elements;
-          for(unsigned int ii=0; ii<sizes.block_size; ii++){
-            for(unsigned int jj=0; jj<sizes.block_size; jj++){
-              for(unsigned int kk=0; kk<sizes.block_size; kk++){
-                // index in origin data
-                cl_ulong i_ = i * sizes.block_size + ii;
-                cl_ulong j_ = j * sizes.block_size + jj;
-                cl_ulong k_ = k * sizes.block_size + kk;
-                i_ = (i_ < r1) ? i_ : r1 - 1;
-                j_ = (j_ < r2) ? j_ : r2 - 1;
-                k_ = (k_ < r3) ? k_ : r3 - 1;
-                data_buffer_location[ii * sizes.block_size * sizes.block_size + jj * sizes.block_size + kk] = oriData[i_ * r2 * r3 + j_ * r3 + k_];
-              }
-            }
-          }
-        }
-      }
-    }
+    prepare_data_buffer(oriData, sizes, data_buffer);
 
     unsigned char* indicator =
       (unsigned char*)calloc(sizes.num_blocks, sizeof(unsigned char));
@@ -1453,5 +1468,6 @@ make_sz_opencl_sizes(cl_ulong block_size, cl_ulong r1, cl_ulong r2, cl_ulong r3)
   sizes.pred_buffer_size=sizes.num_blocks * sizes.num_blocks;
   sizes.block_dim0_offset=sizes.pred_buffer_block_size*sizes.pred_buffer_block_size;
   sizes.block_dim1_offset=sizes.pred_buffer_block_size;
+  sizes.data_buffer_size=sizes.num_blocks * sizes.max_num_block_elements;
   return sizes;
 }
