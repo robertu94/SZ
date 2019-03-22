@@ -165,36 +165,44 @@ for (cl_ulong i = 0; i < sizes->num_x; i++) {
 
 }
 
-size_t
-save_unpredictable_data(sz_opencl_sizes const* sizes,
-                        double realPrecision, float mean,
-                        bool use_mean, float* data_buffer,
-                        int* type, float* unpredictable_data, int* result_type,
-                        float* reg_params, const unsigned char* indicator,
-                        int* blockwise_unpred_count)
-{
-  size_t total_unpred = 0;	
-  //Pre-scanning indicator to get the reg_params_pos of regression params for each block id {i,j,k}
-  size_t* reg_params_pos_index = (size_t*)malloc(sizes->num_blocks*sizeof(size_t));
-  memset(reg_params_pos_index, 0, sizes->num_blocks*sizeof(size_t));
-  size_t counter = 0;
-  for (size_t i = 0; i < sizes->num_x; i++) {
-    for (size_t j = 0; j < sizes->num_y; j++) {
-      for (size_t k = 0; k < sizes->num_z; k++) {
-		   size_t block_id = i*sizes->num_y*sizes->num_z + j*sizes->num_z + k;
-		   unsigned char indic = indicator[block_id];
-		   if(!indic)
-			   reg_params_pos_index[block_id] = counter++;
-	  }
-    }
-  }  
-	
+void save_unpredictable_body(const sz_opencl_sizes *sizes,
+                             double realPrecision,
+                             float mean,
+                             bool use_mean,
+                             float *data_buffer,
+                             const float *reg_params,
+                             const unsigned char *indicator,
+                             const size_t *reg_params_pos_index,
+                             int *blockwise_unpred_count,
+                             float *unpredictable_data,
+                             int *result_type) {
+  int *type;
   int intvRadius = exe_params->intvRadius;
   int intvCapacity = exe_params->intvCapacity;
   int intvCapacity_sz = exe_params->intvCapacity - 2;
   type = result_type;
+
+#if SZ_OPENCL_USE_CUDA
+  //this kernel requires too much memory on the GPU to port now
+
+  //save_unpredictable_body_host(sizes,
+  //                             realPrecision,
+  //                             mean,
+  //                             use_mean,
+  //                             intvRadius,
+  //                             intvCapacity,
+  //                             intvCapacity_sz,
+  //                             reg_params,
+  //                             indicator,
+  //                             reg_params_pos_index,
+  //                             data_buffer,
+  //                             blockwise_unpred_count,
+  //                             unpredictable_data,
+  //                             result_type);
+#endif
+
   //TODO parallelize this loop
-  #pragma omp parallel for collapse(3)
+#pragma omp parallel for collapse(3)
   for (size_t i = 0; i < sizes->num_x; i++) {
     for (size_t j = 0; j < sizes->num_y; j++) {
       for (size_t k = 0; k < sizes->num_z; k++) {
@@ -213,7 +221,7 @@ save_unpredictable_data(sz_opencl_sizes const* sizes,
           size_t block_unpredictable_count = 0;
           float* cur_data_pos = data_pos;
           //locate regression parameters' positions
-          float* reg_params_pos = reg_params + reg_params_pos_index[block_id];
+          const float* reg_params_pos = reg_params + reg_params_pos_index[block_id];
           
           for (size_t ii = 0; ii < sizes->block_size; ii++) {
             for (size_t jj = 0; jj < sizes->block_size; jj++) {
@@ -323,7 +331,48 @@ save_unpredictable_data(sz_opencl_sizes const* sizes,
       } // end k
     } // end j
   }   // end i
-  
+
+}
+size_t
+save_unpredictable_data(sz_opencl_sizes const *sizes,
+                        double realPrecision,
+                        float mean,
+                        bool use_mean,
+                        float *data_buffer,
+                        float *unpredictable_data,
+                        int *result_type,
+                        float *reg_params,
+                        const unsigned char *indicator,
+                        int *blockwise_unpred_count)
+{
+  size_t total_unpred = 0;	
+  //Pre-scanning indicator to get the reg_params_pos of regression params for each block id {i,j,k}
+  size_t* reg_params_pos_index = (size_t*)malloc(sizes->num_blocks*sizeof(size_t));
+  memset(reg_params_pos_index, 0, sizes->num_blocks*sizeof(size_t));
+  size_t counter = 0;
+  for (size_t i = 0; i < sizes->num_x; i++) {
+    for (size_t j = 0; j < sizes->num_y; j++) {
+      for (size_t k = 0; k < sizes->num_z; k++) {
+		   size_t block_id = i*sizes->num_y*sizes->num_z + j*sizes->num_z + k;
+		   unsigned char indic = indicator[block_id];
+		   if(!indic)
+			   reg_params_pos_index[block_id] = counter++;
+	  }
+    }
+  }
+
+  save_unpredictable_body(sizes,
+                          realPrecision,
+                          mean,
+                          use_mean,
+                          data_buffer,
+                          reg_params,
+                          indicator,
+                          reg_params_pos_index,
+                          blockwise_unpred_count,
+                          unpredictable_data,
+                          result_type);
+
   free(reg_params_pos_index);
 
   //TODO: compute the total_unpred;
@@ -514,7 +563,8 @@ decode_all_blocks(unsigned char* comp_data_pos, const sz_opencl_sizes& sizes,
                   node_t* root, const sz_opencl_decompress_positions& pos,
                   const size_t* type_array_offset, int* result_type)
 {
-  //TODO refactor
+  //not porting to GPU because this decoder is inefficent on GPU and newer decoders
+  //are underdevelopment
   #pragma omp parallel for collapse(3)
   for (size_t i = pos.start_block1; i < pos.end_block1; i++) {
     for (size_t j = pos.start_block2; j < pos.end_block2; j++) {
@@ -919,14 +969,13 @@ extern "C"
     // calculate block dims
     const sz_opencl_sizes sizes = make_sz_opencl_sizes(/*block_size*/ 6, r1, r2, r3);
 
-    int* result_type = (int*)malloc(sizes.num_blocks *
-                                    sizes.max_num_block_elements * sizeof(int));
+    int* result_type = (int*)malloc(sizes.data_buffer_size * sizeof(int));
     cl_float* result_unpredictable_data = (cl_float*)malloc(
       sizes.unpred_data_max_size * sizeof(cl_float) * sizes.num_blocks);
     cl_float* reg_params =
       (cl_float*)malloc(sizeof(cl_float) * sizes.reg_params_buffer_size);
     cl_float* data_buffer =
-      (cl_float*)malloc(sizeof(cl_float) * sizes.num_blocks * sizes.max_num_block_elements);
+      (cl_float*)malloc(sizeof(cl_float) * sizes.data_buffer_size);
 
     prepare_data_buffer(oriData, sizes, data_buffer);
 
@@ -998,9 +1047,9 @@ extern "C"
     indicator_pos = indicator;
 
     size_t total_unpred = save_unpredictable_data(
-      &sizes, realPrecision, mean, use_mean,
-      data_buffer, type, unpredictable_data, result_type, reg_params,
-      indicator_pos, blockwise_unpred_count_pos);
+        &sizes, realPrecision, mean, use_mean,
+        data_buffer, unpredictable_data, result_type, reg_params,
+        indicator_pos, blockwise_unpred_count_pos);
 
     free(data_buffer);
     int stateNum = 2 * quantization_intervals;

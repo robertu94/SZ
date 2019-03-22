@@ -5,6 +5,9 @@
 #include "cuda_runtime_api.h"
 #include "sz_opencl_kernels.h"
 
+/**
+  calls a CUDA api and returns an error if there was one
+  */
 #define CUDA_SAFE_CALL(call) {                                    \
   cudaError err = call;                                                    \
   if( cudaSuccess != err) {                                                \
@@ -14,7 +17,9 @@
   } \
 }
 
-
+/**
+  calls a cuda kernel and returns an error if there was one
+  */
 #define CUDA_SAFE_KERNEL_CALL(call) {                                    \
 	call; \
 	cudaError_t err = cudaGetLastError(); \
@@ -25,14 +30,41 @@
   } \
 }
 
+/**
+  preforms integer division that rounds up instead of down
+
+  throws a domain error if the division results in overflow
+  */
 template <class  T, class U>
 auto integer_divide_up(T a, U b) {
   size_t val = (a % b != 0) ? (a/b+1) : (a/b);
-  if(val > std::numeric_limits<T>::max())
+  if(val > std::numeric_limits<decltype(a+b)>::max())
     throw std::domain_error("invalid integer division");
   else return val;
 }
 
+/**
+  returns the max block size for a square kernel of a given dimension for the current cuda device
+
+  Requires dimension be between 1 and 3 inclusive
+  */
+int max_block_size(int dim) {
+  int deviceNum;
+  unsigned int maxBlockSize;
+  cudaGetDevice(&deviceNum);
+  cudaDeviceGetAttribute((int*)&maxBlockSize, cudaDevAttrMaxThreadsPerBlock, deviceNum);
+  switch(dim)
+  {
+    case 3:
+      return floor(cbrt(maxBlockSize));
+    case 2: 
+      return floor(sqrt(maxBlockSize));
+    case 1:
+      return maxBlockSize;
+    default:
+      throw std::domain_error("invalid kernel dimension");
+  }
+}
 
 __global__ void
 calculate_regression_coefficents_kernel(
@@ -95,12 +127,7 @@ calculate_regression_coefficents_host(
         struct sz_opencl_sizes const* sizes,
         float* reg_params,
         float* const pred_buffer){
-  int deviceNum;
-  unsigned int maxBlockSize;
-  cudaGetDevice(&deviceNum);
-  cudaDeviceGetAttribute((int*)&maxBlockSize, cudaDevAttrMaxThreadsPerBlock, deviceNum);
-  maxBlockSize = floor(cbrt(maxBlockSize));
-
+  unsigned int maxBlockSize = max_block_size(3);
 
   dim3 block_size{maxBlockSize,maxBlockSize,maxBlockSize};
   dim3 grid_size{sizes->num_x/maxBlockSize + 1, sizes->num_y/maxBlockSize + 1, sizes->num_z/maxBlockSize + 1};
@@ -159,12 +186,7 @@ void copy_block_data_host(float **data,
   float* dec_block_data_d;
   sz_opencl_decompress_positions* pos_d;
 
-  int deviceNum;
-  unsigned int maxBlockSize2;
-  cudaGetDevice(&deviceNum);
-  cudaDeviceGetAttribute((int*)&maxBlockSize2, cudaDevAttrMaxThreadsPerBlock, deviceNum);
-  maxBlockSize2 = floor(sqrt(maxBlockSize2));
-
+  unsigned int maxBlockSize2 = max_block_size(2);
 
   dim3 block_size(maxBlockSize2,maxBlockSize2);
   dim3 grid_size(pos.data_elms1/maxBlockSize2+1, pos.data_elms2/maxBlockSize2+1);
@@ -221,12 +243,7 @@ void prepare_data_buffer_host(float const *oriData, sz_opencl_sizes const *sizes
   sz_opencl_sizes* sizes_d;
   float* data_buffer_d;
 
-  int deviceNum;
-  unsigned int maxBlockSize;
-  cudaGetDevice(&deviceNum);
-  cudaDeviceGetAttribute((int*)&maxBlockSize, cudaDevAttrMaxThreadsPerBlock, deviceNum);
-  maxBlockSize = floor(cbrt(maxBlockSize));
-
+  unsigned int maxBlockSize = max_block_size(3);
 
   dim3 block_size{maxBlockSize,maxBlockSize,maxBlockSize};
   dim3 grid_size(integer_divide_up(sizes->num_x,maxBlockSize), integer_divide_up(sizes->num_y,maxBlockSize), integer_divide_up(sizes->num_z, maxBlockSize));
@@ -333,11 +350,7 @@ opencl_sample_host(const sz_opencl_sizes* sizes,
               unsigned char* indicator_pos
 )
 {
-  int deviceNum;
-  unsigned int maxBlockSize;
-  cudaGetDevice(&deviceNum);
-  cudaDeviceGetAttribute((int*)&maxBlockSize, cudaDevAttrMaxThreadsPerBlock, deviceNum);
-  maxBlockSize = floor(cbrt(maxBlockSize));
+  unsigned int maxBlockSize = max_block_size(3);
 
   dim3 block_size{maxBlockSize,maxBlockSize,maxBlockSize};
   dim3 grid_size(integer_divide_up(sizes->num_x,maxBlockSize), integer_divide_up(sizes->num_y,maxBlockSize), integer_divide_up(sizes->num_z, maxBlockSize));
@@ -365,6 +378,220 @@ opencl_sample_host(const sz_opencl_sizes* sizes,
   CUDA_SAFE_CALL(cudaFree(sizes_d));
   CUDA_SAFE_CALL(cudaFree(reg_params_pos_d));
   CUDA_SAFE_CALL(cudaFree(indicator_pos_d));
+
+
+}
+
+__global__
+void save_unpredictable_body_kernel(const sz_opencl_sizes *sizes,
+                                    double realPrecision,
+                                    float mean,
+                                    bool use_mean,
+                                    int intvRadius,
+                                    int intvCapacity,
+                                    int intvCapacity_sz,
+                                    const float *reg_params,
+                                    const unsigned char *indicator,
+                                    const size_t *reg_params_pos_index,
+                                    float *data_buffer,
+                                    int *blockwise_unpred_count,
+                                    float *unpredictable_data,
+                                    int *result_type)
+{
+  unsigned long i = threadIdx.x + blockIdx.x * blockDim.x;//get_global_id(0);
+  unsigned long j = threadIdx.y + blockIdx.y * blockDim.y;//get_global_id(1);
+  unsigned long k = threadIdx.z + blockIdx.z * blockDim.z;//get_global_id(2);
+  const size_t block_id = i * (sizes->num_y * sizes->num_z) + j * sizes->num_z + k;
+  unsigned char indic = indicator[block_id];
+  size_t block_data_pos = block_id*sizes->max_num_block_elements;
+  float* data_pos = data_buffer + block_data_pos;
+  size_t unpred_data_pos = block_data_pos;
+  int *type = result_type + block_data_pos;
+  if (!indic) {
+    float curData;
+    float pred;
+    double itvNum;
+    double diff;
+    size_t index = 0;
+    size_t block_unpredictable_count = 0;
+    float* cur_data_pos = data_pos;
+    //locate regression parameters' positions
+    const float* reg_params_pos = reg_params + reg_params_pos_index[block_id];
+
+    for (size_t ii = 0; ii < sizes->block_size; ii++) {
+      for (size_t jj = 0; jj < sizes->block_size; jj++) {
+        for (size_t kk = 0; kk < sizes->block_size; kk++) {
+          curData = *cur_data_pos;
+          pred = reg_params_pos[0] * ii +
+              reg_params_pos[sizes->params_offset_b] * jj +
+              reg_params_pos[sizes->params_offset_c] * kk +
+              reg_params_pos[sizes->params_offset_d];
+          diff = curData - pred;
+          itvNum = fabs(diff) / realPrecision + 1;
+          if (itvNum < intvCapacity) {
+            if (diff < 0)
+              itvNum = -itvNum;
+            type[index] = (int)(itvNum / 2) + intvRadius;
+            pred = pred + 2 * (type[index] - intvRadius) * realPrecision;
+            // ganrantee comporession error against the case of
+            // machine-epsilon
+            if (fabs(curData - pred) > realPrecision) {
+              type[index] = 0;
+              unpredictable_data[unpred_data_pos+block_unpredictable_count++] = curData;
+            }
+          } else {
+            type[index] = 0;
+            unpredictable_data[unpred_data_pos+block_unpredictable_count++] = curData;
+          }
+          index++;
+          cur_data_pos++;
+        }
+      }
+    }
+    blockwise_unpred_count[block_id] = block_unpredictable_count;
+  } else {
+    // use SZ
+    // SZ predication
+    float* cur_data_pos = data_pos;
+    float curData;
+    float pred3D;
+    double itvNum, diff;
+    size_t index = 0;
+    size_t block_unpredictable_count = 0;
+    for (size_t ii = 0; ii < sizes->block_size; ii++) {
+      for (size_t jj = 0; jj < sizes->block_size; jj++) {
+        for (size_t kk = 0; kk < sizes->block_size; kk++) {
+          curData = *cur_data_pos;
+          if (use_mean && fabs(curData - mean) <= realPrecision) {
+            type[index] = 1;
+            *cur_data_pos = mean;
+          } else {
+            float d000, d001, d010, d011, d100, d101, d110;
+            d000 = d001 = d010 = d011 = d100 = d101 = d110 = 1;
+            if(ii == 0){
+              d000 = d001 = d010 = d011 = 0;
+            }
+            if(jj == 0){
+              d000 = d001 = d100 = d101 = 0;
+            }
+            if(kk == 0){
+              d000 = d010 = d100 = d110 = 0;
+            }
+            d000 = d000 ? cur_data_pos[-sizes->strip_dim0_offset - sizes->strip_dim1_offset - 1] : 0;
+            d001 = d001 ? cur_data_pos[-sizes->strip_dim0_offset - sizes->strip_dim1_offset] : 0;
+            d010 = d010 ? cur_data_pos[-sizes->strip_dim0_offset - 1] : 0;
+            d011 = d011 ? cur_data_pos[-sizes->strip_dim0_offset] : 0;
+            d100 = d100 ? cur_data_pos[-sizes->strip_dim1_offset - 1] : 0;
+            d101 = d101 ? cur_data_pos[-sizes->strip_dim1_offset] : 0;
+            d110 = d110 ? cur_data_pos[- 1] : 0;
+
+            pred3D = d110 + d101 + d011 - d100 - d010 - d001 + d000;
+            diff = curData - pred3D;
+            itvNum = fabs(diff) / realPrecision + 1;
+            if (itvNum < intvCapacity_sz) {
+              if (diff < 0)
+                itvNum = -itvNum;
+              type[index] = (int)(itvNum / 2) + intvRadius;
+              *cur_data_pos =
+                  pred3D + 2 * (type[index] - intvRadius) * realPrecision;
+              // ganrantee comporession error against the case of
+              // machine-epsilon
+              if (fabs(curData - *cur_data_pos) > realPrecision) {
+                type[index] = 0;
+                *cur_data_pos = curData;
+                unpredictable_data[unpred_data_pos+block_unpredictable_count++] = curData;
+              }
+            } else {
+              type[index] = 0;
+              *cur_data_pos = curData;
+              unpredictable_data[unpred_data_pos+block_unpredictable_count++] = curData;
+            }
+          }
+          index++;
+          cur_data_pos++;
+        }
+      }
+    }
+    blockwise_unpred_count[block_id] = block_unpredictable_count;
+  } // end SZ
+}
+
+void save_unpredictable_body_host(const sz_opencl_sizes *sizes,
+                                  double realPrecision,
+                                  float mean,
+                                  bool use_mean,
+                                  int intvRadius,
+                                  int intvCapacity,
+                                  int intvCapacity_sz,
+                                  const float *reg_params,
+                                  const unsigned char *indicator,
+                                  const unsigned long *reg_params_pos_index,
+                                  float *data_buffer,
+                                  int *blockwise_unpred_count,
+                                  float *unpredictable_data,
+                                  int *result_type) {
+  sz_opencl_sizes *sizes_d;
+  float *data_buffer_d;
+  float *unpredictable_data_d;
+  int *result_type_d;
+  float *reg_params_d;
+  unsigned char *indicator_d;
+  int *blockwise_unpred_count_d;
+  unsigned long *reg_params_pos_index_d;
+
+  unsigned int maxBlockSize = max_block_size(3);
+  dim3 block_size(maxBlockSize, maxBlockSize, maxBlockSize);
+  dim3 grid_size(integer_divide_up(sizes->num_x,maxBlockSize), integer_divide_up(sizes->num_y,maxBlockSize), integer_divide_up(sizes->num_z,maxBlockSize));
+
+  CUDA_SAFE_CALL(cudaMalloc(&sizes_d, sizeof(sz_opencl_sizes))); 
+  CUDA_SAFE_CALL(cudaMalloc(&data_buffer_d, sizeof(float) * sizes->data_buffer_size)); 
+  CUDA_SAFE_CALL(cudaMalloc(&unpredictable_data_d, sizeof(float) * sizes->unpred_data_max_size * sizes->block_size)); 
+  CUDA_SAFE_CALL(cudaMalloc(&result_type_d, sizeof(int) * sizes->data_buffer_size)); 
+  CUDA_SAFE_CALL(cudaMalloc(&reg_params_d, sizeof(float)* sizes->reg_params_buffer_size)); 
+  CUDA_SAFE_CALL(cudaMalloc(&indicator_d, sizeof(unsigned char) * sizes->num_blocks)); 
+  CUDA_SAFE_CALL(cudaMalloc(&blockwise_unpred_count_d, sizeof(int) * sizes->num_blocks)); 
+  CUDA_SAFE_CALL(cudaMalloc(&reg_params_pos_index_d, sizeof(unsigned long) * sizes->reg_params_buffer_size));
+
+  CUDA_SAFE_CALL(cudaMemcpy(sizes_d,sizes, sizeof(sz_opencl_sizes), cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(data_buffer_d,data_buffer, sizeof(float) * sizes->data_buffer_size, cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(unpredictable_data_d,unpredictable_data, sizeof(float) * sizes->unpred_data_max_size * sizes->block_size, cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(result_type_d,result_type, sizeof(int) * sizes->data_buffer_size, cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(reg_params_d,reg_params, sizeof(float)* sizes->reg_params_buffer_size, cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(indicator_d,indicator, sizeof(unsigned char) * sizes->num_blocks, cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(blockwise_unpred_count_d,blockwise_unpred_count, sizeof(int) * sizes->num_blocks, cudaMemcpyHostToDevice)); 
+  CUDA_SAFE_CALL(cudaMemcpy(reg_params_pos_index_d,reg_params_pos_index, sizeof(unsigned long) * sizes->reg_params_buffer_size, cudaMemcpyHostToDevice));
+
+  save_unpredictable_body_kernel <<<grid_size,block_size>>>(sizes_d,
+                                 realPrecision,
+                                 mean,
+                                 use_mean,
+                                 intvRadius,
+                                 intvCapacity,
+                                 intvCapacity_sz,
+                                 reg_params_d,
+                                 indicator_d,
+                                 reg_params_pos_index_d,
+                                 data_buffer_d,
+                                 blockwise_unpred_count_d,
+                                 unpredictable_data_d,
+                                 result_type
+                                 );
+
+  //donot copy reg_params, indicator, or reg_params_pos_index back since they are const
+  CUDA_SAFE_CALL(cudaMemcpy(data_buffer,data_buffer_d, sizeof(float) * sizes->data_buffer_size, cudaMemcpyDeviceToHost)); 
+  CUDA_SAFE_CALL(cudaMemcpy(unpredictable_data,unpredictable_data_d, sizeof(float) * sizes->unpred_data_max_size * sizes->block_size, cudaMemcpyDeviceToHost)); 
+  CUDA_SAFE_CALL(cudaMemcpy(result_type,result_type_d, sizeof(int) * sizes->data_buffer_size, cudaMemcpyDeviceToHost)); 
+  CUDA_SAFE_CALL(cudaMemcpy(blockwise_unpred_count,blockwise_unpred_count_d, sizeof(int) * sizes->num_blocks, cudaMemcpyDeviceToHost));
+
+
+  CUDA_SAFE_CALL(cudaFree(sizes_d));
+  CUDA_SAFE_CALL(cudaFree(data_buffer_d));
+  CUDA_SAFE_CALL(cudaFree(unpredictable_data_d));
+  CUDA_SAFE_CALL(cudaFree(result_type_d));
+  CUDA_SAFE_CALL(cudaFree(reg_params_d));
+  CUDA_SAFE_CALL(cudaFree(indicator_d));
+  CUDA_SAFE_CALL(cudaFree(blockwise_unpred_count_d));
+  CUDA_SAFE_CALL(cudaFree(reg_params_pos_index_d));
 
 
 }

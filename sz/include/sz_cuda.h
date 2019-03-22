@@ -25,4 +25,19 @@ opencl_sample_host(const sz_opencl_sizes* sizes,
               const float* reg_params_pos,
               unsigned char* indicator_pos
 );
+
+void save_unpredictable_body_host(const sz_opencl_sizes *sizes,
+                                  double realPrecision,
+                                  float mean,
+                                  bool use_mean,
+                                  int intvRadius,
+                                  int intvCapacity,
+                                  int intvCapacity_sz,
+                                  const float *reg_params,
+                                  const unsigned char *indicator,
+                                  const unsigned long *reg_params_pos_index,
+                                  float *data_buffer,
+                                  int *blockwise_unpred_count,
+                                  float *unpredictable_data,
+                                  int *result_type);
 #endif
