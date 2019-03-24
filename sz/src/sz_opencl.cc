@@ -662,17 +662,30 @@ compress_coefficent_arrays(size_t reg_count,
 }
 
 void
-decompress_all_blocks(const sz_opencl_sizes& sizes,
-                      double realPrecision, float mean, unsigned char use_mean,
-                      const unsigned char* indicator, const float* reg_params,
-                      int intvRadius, const size_t* unpred_offset,
-                      const float* unpred_data,
-                      const sz_opencl_decompress_positions& pos,
-                      const int* result_type,
-                      float*& dec_block_data)
+decompress_all_blocks(const sz_opencl_sizes &sizes,
+                      double realPrecision,
+                      float mean,
+                      unsigned char use_mean,
+                      const unsigned char *indicator,
+                      const float *reg_params,
+                      int intvRadius,
+                      const size_t *unpred_offset,
+                      const float *unpred_data,
+                      const sz_opencl_decompress_positions &pos,
+                      const int *result_type,
+                      float *&dec_block_data,
+                      size_t unpred_data_size)
 {
   dec_block_data =
     (float*)calloc(sizeof(float), pos.dec_block_data_size);
+
+#if SZ_OPENCL_USE_CUDA
+  //currently this kernel requires too many resources on the GPU disable it for now
+  //decompress_all_blocks_host(&sizes, realPrecision, mean, use_mean, indicator,
+  //    reg_params, intvRadius, unpred_offset, unpred_data, &pos, result_type,
+  //    dec_block_data, unpred_data_size);
+#endif
+
   //TODO there is a data dependancy on one of the pointers passed
   #pragma omp parallel for collapse(3)
   for (size_t i = pos.start_block1; i < pos.end_block1; i++) {
@@ -1300,7 +1313,8 @@ extern "C"
     }
 
     float* unpred_data = (float*)comp_data_pos;
-    comp_data_pos += total_unpred * sizeof(float);
+    size_t unpred_data_size = sizeof(float) * total_unpred;
+    comp_data_pos += unpred_data_size;
 
     size_t compressed_type_array_block_size;
     memcpy(&compressed_type_array_block_size, comp_data_pos, sizeof(size_t));
@@ -1334,17 +1348,26 @@ extern "C"
       }
     }
     free(type_array_block_size);
-    int* result_type = (int*)malloc((pos.num_data_blocks1) * sizes.block_size *
-                                    pos.dec_block_dim0_offset * sizeof(int));
+    int* result_type = (int*)malloc(pos.dec_block_data_size* sizeof(int));
     decode_all_blocks(comp_data_pos, sizes, root, pos, type_array_offset,
                       result_type);
     SZ_ReleaseHuffman(huffmanTree);
     free(type_array_offset);
 
     float* dec_block_data;
-    decompress_all_blocks(sizes, realPrecision, mean, use_mean, indicator,
-                          reg_params, intvRadius, unpred_offset, unpred_data,
-                          pos, result_type, dec_block_data);
+    decompress_all_blocks(sizes,
+                          realPrecision,
+                          mean,
+                          use_mean,
+                          indicator,
+                          reg_params,
+                          intvRadius,
+                          unpred_offset,
+                          unpred_data,
+                          pos,
+                          result_type,
+                          dec_block_data,
+                          unpred_data_size);
 
     free(unpred_offset);
     free(reg_params);

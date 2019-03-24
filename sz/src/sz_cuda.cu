@@ -595,3 +595,198 @@ void save_unpredictable_body_host(const sz_opencl_sizes *sizes,
 
 
 }
+
+
+__device__
+void
+decompress_location_using_regression_kernel(const sz_opencl_sizes* sizes, const sz_opencl_decompress_positions* pos,
+                                     const float* reg_params_pos,
+                                     const int* type, const float* block_unpred,
+                                     double realPrecision, int intvRadius,
+                                     float* data_out)
+{
+  size_t unpredictable_count = 0;
+  //TODO refactor unpredictable count in to a pre-scan to remove dependance on unpredictable_count
+  //#pragma omp parallel for collapse(3)
+  for (size_t ii = 0; ii < sizes->block_size; ii++) {
+    for (size_t jj = 0; jj < sizes->block_size; jj++) {
+      for (size_t kk = 0; kk < sizes->block_size; kk++) {
+        size_t index = (ii*sizes->block_size*sizes->block_size) + (jj*sizes->block_size) + kk;
+        int type_ = type[index];
+        if (type_ != 0) {
+          float pred = reg_params_pos[0] * ii + reg_params_pos[1] * jj +
+              reg_params_pos[2] * kk + reg_params_pos[3];
+          data_out[ii * pos->dec_block_dim0_offset + jj * pos->dec_block_dim1_offset +
+              kk] = pred + 2 * (type_ - intvRadius) * realPrecision;
+        } else {
+          data_out[ii * pos->dec_block_dim0_offset + jj * pos->dec_block_dim1_offset +
+              kk] = block_unpred[unpredictable_count++];
+        }
+      }
+    }
+  }
+}
+
+__device__
+void
+decompress_location_using_sz_kernel(const sz_opencl_sizes* sizes, const sz_opencl_decompress_positions* pos, double realPrecision,
+                             float mean, unsigned char use_mean, int intvRadius,
+                             const int* type, float* data_pos,
+                             const float* block_unpred)
+{
+  float* cur_data_pos;
+  float pred;
+  size_t index = 0;
+  int type_;
+  size_t unpredictable_count = 0;
+  //DO NOT parallelize this loop too small to matter!
+  for (size_t ii = 0; ii < sizes->block_size; ii++) {
+    for (size_t jj = 0; jj < sizes->block_size; jj++) {
+      for (size_t kk = 0; kk < sizes->block_size; kk++) {
+        cur_data_pos = data_pos + ii * pos->dec_block_dim0_offset +
+                         jj * pos->dec_block_dim1_offset + kk;
+        type_ = type[index];
+        if (use_mean && type_ == 1) {
+          *cur_data_pos = mean;
+        } else if (type_ == 0) {
+          *cur_data_pos = block_unpred[unpredictable_count++];
+        } else {
+          float d000, d001, d010, d011, d100, d101, d110;
+          d000 = d001 = d010 = d011 = d100 = d101 = d110 = 1;
+          if(ii == 0){
+            d000 = d001 = d010 = d011 = 0;
+          }
+          if(jj == 0){
+            d000 = d001 = d100 = d101 = 0;
+          }
+          if(kk == 0){
+            d000 = d010 = d100 = d110 = 0;
+          }
+          d000 = d000 ? cur_data_pos[-pos->dec_block_dim0_offset - pos->dec_block_dim1_offset - 1] : 0;
+          d001 = d001 ? cur_data_pos[-pos->dec_block_dim0_offset - pos->dec_block_dim1_offset] : 0;
+          d010 = d010 ? cur_data_pos[-pos->dec_block_dim0_offset - 1] : 0;
+          d011 = d011 ? cur_data_pos[-pos->dec_block_dim0_offset] : 0;
+          d100 = d100 ? cur_data_pos[-pos->dec_block_dim1_offset - 1] : 0;
+          d101 = d101 ? cur_data_pos[-pos->dec_block_dim1_offset] : 0;
+          d110 = d110 ? cur_data_pos[- 1] : 0;
+          // pred =
+          //   block_data_pos[-1] + block_data_pos[-sizes->block_dim1_offset] +
+          //   block_data_pos[-sizes->block_dim0_offset] -
+          //   block_data_pos[-sizes->block_dim1_offset - 1] -
+          //   block_data_pos[-sizes->block_dim0_offset - 1] -
+          //   block_data_pos[-sizes->block_dim0_offset - sizes->block_dim1_offset] +
+          //   block_data_pos[-sizes->block_dim0_offset - sizes->block_dim1_offset -
+          //                  1];
+          pred = d110 + d101 + d011 - d100 - d010 - d001 + d000;
+          *cur_data_pos = pred + 2 * (type_ - intvRadius) * realPrecision;
+        }
+        index++;
+      }
+    }
+  }
+}
+
+__global__
+void decompress_all_blocks_kernel(const sz_opencl_sizes* sizes,
+                                double realPrecision, float mean, unsigned char use_mean,
+                                const unsigned char* indicator, const float* reg_params,
+                                int intvRadius, const size_t* unpred_offset,
+                                const float* unpred_data,
+                                const sz_opencl_decompress_positions* pos,
+                                const int* result_type,
+                                float* dec_block_data)
+{
+  unsigned long i = threadIdx.x + blockIdx.x * blockDim.x;
+  unsigned long j = threadIdx.y + blockIdx.y * blockDim.y;
+  unsigned long k = threadIdx.z + blockIdx.z * blockDim.z;
+  float* data_pos = dec_block_data + (i - pos->start_block1)*sizes->block_size*pos->dec_block_dim0_offset + (j - pos->start_block2)*sizes->block_size*pos->dec_block_dim1_offset + (k - pos->start_block3)*sizes->block_size;
+  const int* type = result_type +
+      (i - pos->start_block1) * sizes->block_size * sizes->block_size *
+          (pos->num_data_blocks2) * sizes->block_size *
+          (pos->num_data_blocks3) +
+      (j - pos->start_block2) * sizes->max_num_block_elements *
+          (pos->num_data_blocks3) +
+      (k - pos->start_block3) * sizes->max_num_block_elements;
+  size_t coeff_index =
+      i * sizes->num_y * sizes->num_z + j * sizes->num_z + k;
+  const float* block_unpred = unpred_data + unpred_offset[coeff_index];
+  if (indicator[coeff_index]) {
+    // decompress by SZ
+    decompress_location_using_sz_kernel(sizes, pos, realPrecision, mean, use_mean,
+                                 intvRadius, type, data_pos,
+                                 block_unpred);
+  } else {
+    // decompress by regression
+    decompress_location_using_regression_kernel(
+        sizes, pos, reg_params + 4 * coeff_index, type, block_unpred,
+        realPrecision, intvRadius, data_pos);
+  }
+}
+
+void decompress_all_blocks_host(const sz_opencl_sizes* sizes,
+                           double realPrecision, float mean, unsigned char use_mean,
+                           const unsigned char* indicator, const float* reg_params,
+                           int intvRadius, const size_t* unpred_offset,
+                           const float* unpred_data,
+                           const sz_opencl_decompress_positions* pos,
+                           const int* result_type,
+                           float* dec_block_data, size_t data_unpred_size)
+{
+sz_opencl_sizes* sizes_d;
+unsigned char* indicator_d;
+float* reg_params_d;
+size_t* unpred_offset_d;
+float* unpred_data_d;
+sz_opencl_decompress_positions* pos_d;
+int* result_type_d;
+float* dec_block_data_d;
+
+unsigned int maxBlockSize = max_block_size(3);
+dim3 block_size(maxBlockSize, maxBlockSize, maxBlockSize);
+dim3 grid_size(integer_divide_up(pos->num_data_blocks1,maxBlockSize), integer_divide_up(pos->num_data_blocks2,maxBlockSize), integer_divide_up(pos->num_data_blocks2,maxBlockSize));
+
+
+CUDA_SAFE_CALL(cudaMalloc(&sizes_d, sizeof(sz_opencl_sizes)));
+CUDA_SAFE_CALL(cudaMalloc(&indicator_d, sizeof(unsigned char) * sizes->num_blocks));
+CUDA_SAFE_CALL(cudaMalloc(&reg_params_d, sizeof(float)* sizes->reg_params_buffer_size));
+CUDA_SAFE_CALL(cudaMalloc(&unpred_offset_d, sizeof(size_t) * sizes->num_blocks));
+CUDA_SAFE_CALL(cudaMalloc(&unpred_data_d, sizeof(float)* data_unpred_size));
+CUDA_SAFE_CALL(cudaMalloc(&pos_d, sizeof(sz_opencl_decompress_positions)));
+CUDA_SAFE_CALL(cudaMalloc(&result_type_d, sizeof(int)* sizes->data_buffer_size));
+CUDA_SAFE_CALL(cudaMalloc(&dec_block_data_d, sizeof(float) * pos->dec_block_data_size));
+
+
+CUDA_SAFE_CALL(cudaMemcpy(sizes_d,sizes, sizeof(sz_opencl_sizes), cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(indicator_d,indicator, sizeof(unsigned char) * sizes->num_blocks, cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(reg_params_d,reg_params, sizeof(float)* sizes->reg_params_buffer_size, cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(unpred_offset_d,unpred_offset, sizeof(size_t) * sizes->num_blocks, cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(unpred_data_d,unpred_data, sizeof(float)* data_unpred_size, cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(pos_d,pos, sizeof(sz_opencl_decompress_positions), cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(result_type_d,result_type, sizeof(int)* sizes->data_buffer_size, cudaMemcpyHostToDevice));
+CUDA_SAFE_CALL(cudaMemcpy(dec_block_data_d,dec_block_data, sizeof(float) * pos->dec_block_data_size, cudaMemcpyHostToDevice));
+
+decompress_all_blocks_kernel<<<grid_size, block_size>>>(sizes_d,
+                                realPrecision, mean, use_mean,
+                                indicator_d, reg_params_d,
+                                intvRadius, unpred_offset_d,
+                                unpred_data_d,
+                                pos_d,
+                                result_type_d,
+                                dec_block_data_d);
+
+
+//only dec_block_data is non-const, so only copy it back
+CUDA_SAFE_CALL(cudaMemcpy(dec_block_data,dec_block_data_d, sizeof(float) * pos->dec_block_data_size, cudaMemcpyDeviceToHost));
+
+
+CUDA_SAFE_CALL(cudaFree(sizes_d));
+CUDA_SAFE_CALL(cudaFree(indicator_d));
+CUDA_SAFE_CALL(cudaFree(reg_params_d));
+CUDA_SAFE_CALL(cudaFree(unpred_offset_d));
+CUDA_SAFE_CALL(cudaFree(unpred_data_d));
+CUDA_SAFE_CALL(cudaFree(pos_d));
+CUDA_SAFE_CALL(cudaFree(result_type_d));
+CUDA_SAFE_CALL(cudaFree(dec_block_data_d));
+
+
+}
