@@ -19,6 +19,9 @@ target_link_libraries (testdouble_decompress SZ m zlib zstd)
 add_executable (sz sz.c)
 target_link_libraries (sz SZ m zlib zstd)
 
+add_executable (sz_gpu sz_gpu.cc)
+target_link_libraries (sz_gpu SZ m zlib zstd)
+
 #add_executable (opencl_test opencl_test)
 #target_link_libraries (opencl_test SZ m zlib zstd ${OpenCL_LIBRARIES})
 

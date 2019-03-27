@@ -1382,13 +1382,25 @@ extern "C"
     free(dec_block_data);
   }
 
-  int sz_decompress_float_opencl(float** newData, size_t r5, size_t r4,
-                                 size_t r3, size_t r2, size_t r1, size_t s5,
-                                 size_t s4, size_t s3, size_t s2,
-                                 size_t s1, // start point
-                                 size_t e5, size_t e4, size_t e3, size_t e2,
-                                 size_t e1, // end point
-                                 unsigned char* cmpBytes, size_t cmpSize)
+  int sz_decompress_float_opencl(struct sz_opencl_state *state,
+                                   float **newData,
+                                   size_t r5,
+                                   size_t r4,
+                                   size_t r3,
+                                   size_t r2,
+                                   size_t r1,
+                                   size_t s5,
+                                   size_t s4,
+                                   size_t s3,
+                                   size_t s2,
+                                   size_t s1,
+                                   size_t e5,
+                                   size_t e4,
+                                   size_t e3,
+                                   size_t e2,
+                                   size_t e1,
+                                   unsigned char *cmpBytes,
+                                   size_t cmpSize)
   {
     if (confparams_dec == NULL)
       confparams_dec = (sz_params*)malloc(sizeof(sz_params));

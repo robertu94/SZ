@@ -73,6 +73,7 @@ extern "C" {
   /**
    * decompression scheme using the opencl implementation of SZ
    *
+   * @param state the opencl gpu state
    * @param newData  the data that has been decompresed
    * @param r5 the 5th dimension of the data
    * @param r4 the 4th dimension of the data
@@ -93,11 +94,25 @@ extern "C" {
    * @param cmpSize  the size of the data that has been compressed
    * @return a status code for the compression
    */
-	int sz_decompress_float_opencl(float** newData, 
-	size_t r5, size_t r4, size_t r3, size_t r2, size_t r1, 
-	size_t s5, size_t s4, size_t s3, size_t s2, size_t s1, // start point
-	size_t e5, size_t e4, size_t e3, size_t e2, size_t e1, // end point
-	unsigned char* cmpBytes, size_t cmpSize);
+  int sz_decompress_float_opencl(struct sz_opencl_state *state,
+float **newData,
+size_t r5,
+size_t r4,
+size_t r3,
+size_t r2,
+size_t r1,
+size_t s5,
+size_t s4,
+size_t s3,
+size_t s2,
+size_t s1,
+size_t e5,
+size_t e4,
+size_t e3,
+size_t e2,
+size_t e1,
+unsigned char *cmpBytes,
+size_t cmpSize);
 
 
 #endif /* SZ_OPENCL_H */

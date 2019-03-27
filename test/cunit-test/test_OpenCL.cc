@@ -54,7 +54,13 @@ void test_identical_opencl_impl()
 	auto opencl_compressor = [](float* data, size_t r1, size_t r2, size_t r3,double prec, size_t* out_size){
 		return sz_compress_float3d_opencl(state, data, r1, r2, r3, prec, out_size);
 	};
-	auto opencl_decompressor = sz_decompress_float_opencl;
+	auto opencl_decompressor = [](float ** new_data,
+      size_t r5, size_t r4, size_t r3, size_t r2, size_t r1, 
+      size_t s5, size_t s4, size_t s3, size_t s2, size_t s1,
+      size_t e5, size_t e4, size_t e3, size_t e2, size_t e1,
+      unsigned char* data, size_t size) {
+    return sz_decompress_float_opencl(state, new_data, r5,r4,r3,r2,r1, s5,s4,s3,s2,s1, e5,e4,e3,e2,e1, data,size);
+  };
 	auto existing_compressor = SZ_compress_float_3D_MDQ_decompression_random_access_with_blocked_regression;
 	auto existing_decompressor = SZ_decompress_args_randomaccess_float;
 	test_identical_output_compression_random(num_random_test_cases, opencl_compressor, existing_compressor, existing_decompressor, opencl_decompressor);
