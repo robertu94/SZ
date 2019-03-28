@@ -9,3 +9,4 @@ Testing/
 cscope.out
 .project
 .cproject
+.gdb_history
