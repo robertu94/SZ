@@ -7,6 +7,7 @@
 #include "sz_opencl_config.h"
 #include "sz_opencl_private.h"
 
+#if !SZ_OPENCL_USE_CUDA
 std::string
 get_sz_kernel_sources()
 {
@@ -88,3 +89,4 @@ run_kernel(cl::Kernel kernel, cl::NDRange const& global,
   else
     return { computed };
 }
+#endif

@@ -3,20 +3,26 @@
  * that do not also need to be included on a device kernel
  */
 #include <string>
+#include "sz_opencl_config.h"
+
+#if !SZ_OPENCL_USE_CUDA
 #include <CL/cl.hpp>
+#endif
 
 struct sz_opencl_state
 {
   struct error_t
   {
-    cl_int code = 0;
+    int code = 0;
     std::string str;
   } error;
+#if !SZ_OPENCL_USE_CUDA
   cl::Platform platform;
   cl::Device device;
   cl::Context context;
   cl::CommandQueue queue;
   cl::Kernel calculate_regression_coefficents;
+#endif
   int debug_level = 0;
 };
 

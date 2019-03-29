@@ -1,7 +1,6 @@
 /**
  * Contains methods that load or launch kernels
  */
-#include <CL/cl.hpp>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -19,6 +18,14 @@ enum class copy_mode
   TO_FROM
 };
 
+
+class sz_opencl_exception : public std::runtime_error
+{
+  using std::runtime_error::runtime_error;
+};
+
+#if !SZ_OPENCL_USE_CUDA
+#include <CL/cl.hpp>
 struct buffer_copy_info
 {
   void* ptr;
@@ -27,14 +34,10 @@ struct buffer_copy_info
   copy_mode copy;
 };
 
-class sz_opencl_exception : public std::runtime_error
-{
-  using std::runtime_error::runtime_error;
-};
-
 std::string get_sz_kernel_sources();
 
 std::vector<cl::Event> run_kernel(
   cl::Kernel kernel, cl::NDRange const& global, const sz_opencl_state* state,
   const sz_opencl_sizes* sizes,
   const std::vector<buffer_copy_info>& buffer_info);
+#endif

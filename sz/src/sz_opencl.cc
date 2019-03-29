@@ -9,9 +9,13 @@
 #include <utility>
 #include <vector>
 
+#include "sz_opencl_config.h"
+
+#if !SZ_OPENCL_USE_CUDA
 #define __CL_ENABLE_EXCEPTIONS
 #include "CL/cl.hpp"
-#include "sz_opencl_config.h"
+#endif
+
 #include "sz_opencl_host_utils.h"
 #include "sz_opencl_kernels.h"
 #include "sz_opencl_private.h"
@@ -723,6 +727,7 @@ decompress_all_blocks(const sz_opencl_sizes &sizes,
   }
 }
 
+#if !SZ_OPENCL_USE_CUDA
 namespace {
   const char*
   getenv_or(const char* env, const char* default_value)
@@ -732,6 +737,7 @@ namespace {
     else return env_value;
   }
 }
+#endif
 
 void copy_block_data(float **data,
                      const sz_opencl_sizes &sizes,
@@ -797,8 +803,10 @@ extern "C"
   int sz_opencl_init(struct sz_opencl_state** state)
   {
     try {
-      *state = new sz_opencl_state;
 
+			*state = new sz_opencl_state;
+
+#if !SZ_OPENCL_USE_CUDA
       std::vector<cl::Platform> platforms;
       cl::Platform::get(&platforms);
       std::string desired_platform(getenv_or("SZ_CL_PLATFORM",""));
@@ -854,12 +862,15 @@ extern "C"
           throw;
         }
       }
+#endif
 
       return SZ_SCES;
+#if !SZ_OPENCL_USE_CUDA
     } catch (cl::Error const& cl_error) {
       (*state)->error.code = cl_error.err();
       (*state)->error.str = cl_error.what();
       return SZ_NSCS;
+#endif
     } catch (sz_opencl_exception const& sz_error) {
       (*state)->error.code = -1;
       (*state)->error.str = sz_error.what();
@@ -898,6 +909,7 @@ extern "C"
 
   int sz_opencl_check(struct sz_opencl_state* state)
   {
+#if !SZ_OPENCL_USE_CUDA
     try {
       std::string vec_add(
         R"(
@@ -968,6 +980,9 @@ extern "C"
       state->error.str = error.what();
       return SZ_NSCS;
     }
+#else 
+		return SZ_SCES;
+#endif
   }
 
   unsigned char* sz_compress_float3d_opencl(struct sz_opencl_state* state,
