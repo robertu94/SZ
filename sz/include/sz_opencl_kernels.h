@@ -1,3 +1,15 @@
+/**
+ *
+ * A OpenCL/Cuda code for SZ
+ * 
+ * Developed by Robert Underwood while he was at Clemson University This
+ * material is based upon work supported by the National Science Foundation
+ * under Grant No. 1633608.
+ *
+ * This code is a derivative work of the SZ random access code by Sheng Di,
+ * Franck Capello, et al at Argonne National Lab
+ * 
+ */
 #ifndef SZ_OPENCL_KERNELS
 #define SZ_OPENCL_KERNELS
 #ifdef __cplusplus
